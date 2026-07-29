@@ -1,0 +1,2973 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>故事紀要自動總結工具</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI','Noto Sans TC','Microsoft JhengHei',sans-serif;background:#0f1117;color:#e0e0e0;height:100vh;overflow:hidden}
+:root{--bg:#0f1117;--bg2:#1a1c24;--bg3:#23262e;--border:#2d3040;--accent:#6c8cff;--accent2:#ff6b6b;--text:#e0e0e0;--text2:#8890a0;--text3:#4a5260;--green:#4caf7d;--yellow:#ffc857;--red:#e06060}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg2)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+#app{display:flex;flex-direction:column;height:100vh}
+.topbar{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+.topbar .brand{font-weight:700;font-size:16px;color:var(--accent);margin-right:16px}
+.topbar button,.topbar select{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 12px;border-radius:4px;cursor:pointer;font-size:13px}
+.topbar button:hover{background:var(--accent);color:#fff}
+.topbar input{padding:4px 8px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:4px;font-size:13px}
+.tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 8px;overflow-x:auto}
+.tab{padding:8px 16px;cursor:pointer;border-bottom:2px solid transparent;font-size:13px;color:var(--text2);white-space:nowrap}
+.tab:hover{color:var(--text);background:var(--bg3)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.main{flex:1;overflow:hidden;position:relative}
+.panel{display:none;height:100%;overflow:auto;padding:16px}
+.panel.active{display:flex;flex-direction:column}
+.grid-table{width:100%;border-collapse:collapse;font-size:13px}
+.grid-table th{background:var(--bg3);color:var(--text2);padding:6px 8px;text-align:left;border:1px solid var(--border);white-space:nowrap;position:sticky;top:0;z-index:1}
+.grid-table td{padding:4px 8px;border:1px solid var(--border);vertical-align:top}
+.grid-table tr:hover td{background:var(--bg3)}
+.grid-table .editable:focus{outline:2px solid var(--accent);outline-offset:-1px;background:rgba(108,140,255,0.1)}
+.doc-list{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.doc-item{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;display:flex;align-items:center;gap:8px}
+.doc-item .name{flex:1;font-size:13px}
+.doc-item .size{color:var(--text3);font-size:12px}
+.doc-item .badge{font-size:11px;background:var(--accent);color:#fff;padding:1px 6px;border-radius:3px}
+.btn{background:var(--accent);border:none;color:#fff;padding:6px 14px;border-radius:4px;cursor:pointer;font-size:13px}
+.btn:hover{opacity:0.85}
+.btn-sm{padding:3px 8px;font-size:12px}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-outline:hover{background:var(--bg3)}
+.btn-danger{background:var(--red)}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow:auto}
+.modal h3{margin-bottom:12px}
+.modal textarea{width:100%;height:200px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:4px;resize:vertical;font-size:13px}
+.modal .actions{display:flex;gap:8px;margin-top:12px}
+.fr-match{background:#ffd54f;color:#222;border-radius:2px;padding:0 1px}
+.fr-cur{background:#ff9800;color:#fff;padding:0 2px}
+textarea.code{font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:13px}
+.batch-list{display:flex;flex-direction:column;gap:6px}
+.batch-card{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:10px 14px}
+.batch-card .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.batch-card .header .num{font-weight:600;color:var(--accent);font-size:13px}
+.batch-card .header .tokens{color:var(--text3);font-size:12px}
+.batch-card .preview{font-size:13px;color:var(--text2);line-height:1.5;max-height:60px;overflow:hidden;position:relative}
+.batch-card .preview::after{content:'';position:absolute;bottom:0;left:0;right:0;height:20px;background:linear-gradient(transparent,var(--bg3))}
+.batch-card .status{font-size:12px;padding:2px 8px;border-radius:3px;display:inline-block}
+.status-pending{color:var(--text3)}
+.status-done{color:var(--green)}
+.status-processing{color:var(--yellow)}
+.timeline-container{flex:1;overflow:auto;padding:20px}
+.timeline-svg{width:100%;min-height:500px}
+.timeline-svg .event-node{cursor:pointer}
+.timeline-svg .event-node:hover .event-card{opacity:1}
+.timeline-svg .event-card{opacity:0.8;transition:opacity 0.2s}
+.timeline-svg text{font-size:12px;fill:var(--text2)}
+.chat-area{display:flex;flex-direction:column;flex:1;height:100%}
+.chat-messages{flex:1;overflow:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
+.chat-msg{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:8px 12px;max-width:85%;font-size:13px;line-height:1.5}
+.chat-msg.user{margin-left:auto;background:rgba(108,140,255,0.15);border-color:var(--accent)}
+.chat-msg.ai{margin-right:auto}
+.chat-msg .label{font-size:11px;color:var(--text3);margin-bottom:2px}
+.chat-msg pre{background:var(--bg);padding:6px;border-radius:4px;margin:4px 0;font-size:12px;overflow-x:auto}
+.chat-input{display:flex;gap:8px;padding:8px;background:var(--bg2);border-top:1px solid var(--border)}
+.chat-input textarea{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:4px;resize:none;font-size:13px;min-height:36px;max-height:120px}
+.chat-input textarea:focus{outline:none;border-color:var(--accent)}
+.template-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.template-card{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px;cursor:pointer}
+.template-card:hover{border-color:var(--accent)}
+.template-card .name{font-weight:600;font-size:14px}
+.template-card .desc{font-size:12px;color:var(--text2);margin-top:4px}
+.flex{display:flex;gap:8px}
+.flex-1{flex:1}
+.gap-8{gap:8px}
+.mt-8{margin-top:8px}
+.mb-8{margin-bottom:8px}
+.text-center{text-align:center}
+.text-right{text-align:right}
+.text-accent{color:var(--accent)}
+.text-green{color:var(--green)}
+.text-red{color:var(--red)}
+.story-selector{display:flex;gap:8px;align-items:center}
+.d-none{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+<div class="topbar">
+  <span class="brand">📖 故事紀要工具</span>
+  <div class="story-selector">
+    <select id="storySelect" onchange="switchStory(this.value)"><option value="">— 選擇故事 —</option></select>
+    <button onclick="newStory()">＋新故事</button>
+    <button onclick="deleteCurrentStory()" style="background:var(--red);color:#fff" title="刪除當前故事">🗑刪除</button>
+    <button onclick="importStory()">📂匯入</button>
+    <button onclick="exportStory()">💾匯出</button>
+  </div>
+  <span style="flex:1"></span>
+  <span id="protocolHint" style="font-size:12px;display:none"></span>
+  <span id="storyName" style="font-size:13px;color:var(--text2)"></span>
+  <button onclick="showSettings()">⚙設定</button>
+</div>
+<div class="tabs" id="tabBar"></div>
+<div class="main" id="mainArea"></div>
+</div>
+<script>
+// ============ UUID ============
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+
+// ============ Jujutsu Kaisen Default Template ============
+const JK_TEMPLATE = {
+  id:'jk_default',name:'咒術迴戰模板',builtin:true,
+  sheets:{
+    chronicle:{
+      uid:'sheet_chronicle',name:'紀要表',
+      prompt:`# 紀要表填充規則
+你必須從本次內容產出一條新條目。所有欄位值都必須是**單一字串**，重要對白多句時用換行符(\\n)串聯。
+
+## 必填（從內容提取）
+- time_span: 時間跨度 — 精確的時間範圍，如「2020年3月，傍晚」
+- location: 地點 — 事件發生的具體位置
+- chronicle: 紀要 — 200~450字，客觀按時間順序敘述事實，禁止結尾昇華、禁止評價
+- summary: 概覽 — 50字以內，2~3句濃縮核心事件
+- important_lines: 重要對白 — 單一字串，摘錄至少4句關鍵對話，標註說話者。多句以\\n串接。
+- code_index: 編碼索引 — 自動編號，接續上一個編號+1
+
+## 禁止
+- 編造內容中不存在的事件或對白
+- 使用陣列或多個獨立字串（全部合併為單一字串）
+- 結尾加任何昇華、評價或感嘆
+- 用 markdown 包裝 JSON（直接輸出純 JSON）
+
+用繁體中文。`,
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'time_span',name:'時間跨度',type:'text'},
+        {key:'location',name:'地點',type:'text'},
+        {key:'chronicle',name:'紀要',type:'textarea',maxLen:450},
+        {key:'summary',name:'概覽',type:'text',maxLen:100},
+        {key:'important_lines',name:'重要對白',type:'textarea',maxLen:200},
+        {key:'code_index',name:'編碼索引',type:'text'}
+      ],
+      rows:[]
+    },
+    character:{
+      uid:'sheet_character',name:'重要角色表',
+      prompt:`# 角色表填充規則
+從本次內容提取**新登場**或**有新資訊**的角色。若無新角色則輸出空陣列[]。每個角色物件必須使用以下指定 key：
+
+## 必填
+- name: 姓名（必須填寫）
+- occupation: 職業/身份 — 從內容提取，如「咒術高專學生」「咒術師」
+- brief_intro: 人物簡介 — 角色定位與背景介紹（依內容篇幅而定）
+
+## 選填（從內容可推斷就填，推斷不出則留空字串""）
+- gender_age: 性別/年齡 — 如「男/約25歲」
+- appearance: 外貌特徵 — 髮色、瞳色、穿著等
+- current_status: 當前狀態 — 如「活躍」「負傷」
+- is_absent: 是否離場 — 預設「否」，已明確死亡或離開才填「已死亡」
+- power_level: 戰力等級 — 從選項中選：[四級|三級|二級|準一級|一級|特級|強特級|超特級|論外]
+- unique_abilities: 獨特能力 — 角色特有的能力描述
+- innate_technique: 生得術式 — 角色天生具備的術式
+- bp_a: BPA — 數值，無法判斷就留空
+- bp_b: BPB — 數值，無法判斷就留空
+- relationships: 人際關係 — 與其他角色的關係
+- alias: 別稱 — 綽號或稱號
+- affection: 好感度 — 數值(-100~100)，無法判斷就留空
+- trust: 信任度 — 數值(-100~100)，無法判斷就留空
+- relationship_stage: 關係階段 — [陌生|認識|熟人|朋友|摯友|戀人|仇敵|宿敵]
+
+## 鐵則
+1. **只輸出具體有內容的字串，無法判斷的欄位留空字串""，不要編造**
+2. **不要在 JSON 中使用 markdown 或額外文字**
+3. **角色若已在「現有資料」列表中，請輸出該角色僅含需更新的欄位（姓名必須保留）**
+4. **人物簡介(brief_intro)必須合併新舊資訊，不可直接覆蓋。將本次新增的資訊追加到既有簡介中，保留原有內容。**`,
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'name',name:'姓名',type:'text'},
+        {key:'gender_age',name:'性別/年齡',type:'text'},
+        {key:'appearance',name:'外貌特徵',type:'textarea'},
+        {key:'current_status',name:'當前狀態',type:'text',maxLen:30},
+        {key:'is_absent',name:'是否離場',type:'select',options:['否','是','已死亡']},
+        {key:'occupation',name:'職業/身份',type:'text'},
+        {key:'power_level',name:'戰力等級',type:'select',options:['四級','三級','二級','準一級','一級','特級','強特級','超特級','論外']},
+        {key:'unique_abilities',name:'獨特能力',type:'textarea'},
+        {key:'innate_technique',name:'生得術式',type:'text'},
+        {key:'bp_a',name:'BPA(總肉體值)',type:'number'},
+        {key:'bp_b',name:'BPB(術式強度)',type:'number'},
+        {key:'relationships',name:'人際關係',type:'textarea'},
+        {key:'brief_intro',name:'人物簡介',type:'textarea',maxLen:500},
+        {key:'alias',name:'別稱',type:'text'},
+        {key:'affection',name:'好感度',type:'number',min:-100,max:100},
+        {key:'trust',name:'信任度',type:'number',min:-100,max:100},
+        {key:'relationship_stage',name:'關係階段',type:'select',options:['陌生','認識','熟人','朋友','摯友','戀人','仇敵','宿敵']}
+      ],
+      rows:[]
+    },
+    faction:{
+      uid:'sheet_faction',name:'勢力表',
+      prompt:`# 勢力表填充規則
+從本次內容提取**新登場**或**有新資訊**的勢力/組織。若無新勢力則輸出空陣列[]。
+
+## 欄位
+- faction_name: 名稱（**必填**）
+- description: 描述 — 300字以內，勢力的目標、規模、特徵
+- leader: 領袖 — 已知的首領姓名
+- relationships: 關係 — 與其他勢力的關係，如「敵對」「同盟」「隸屬」
+- location: 位置 — 勢力所在位置
+
+## 鐵則
+1. 只從內容中提取真實資訊，不要編造
+2. 無法判斷的欄位留空字串""
+3. 若勢力已在「已有勢力」列表中，請更新其欄位而非建立重複條目`,
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'faction_name',name:'名稱',type:'text'},
+        {key:'description',name:'描述',type:'textarea',maxLen:300},
+        {key:'leader',name:'領袖',type:'text'},
+        {key:'relationships',name:'關係',type:'text'},
+        {key:'location',name:'位置',type:'text'}
+      ],
+      rows:[]
+    },
+    item:{
+      uid:'sheet_item',name:'重要物品表',
+      prompt:`# 物品表填充規則
+從本次內容提取**新登場**的重要物品/道具。若無新物品則輸出空陣列[]。
+
+## 欄位
+- item_name: 物品名稱（**必填**）
+- quantity: 數量 — 數字，如 1
+- description: 詳細描述 — 300字以內
+- category: 類別 — 如「咒具」「武器」「飾品」
+- remarks: 備註 — 任何補充說明
+- brief_intro: 物品簡介 — 20字以內濃縮
+
+## 鐵則
+1. 只從內容提取，不要編造
+2. 無法判斷的欄位留空字串""`,
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'item_name',name:'物品名稱',type:'text'},
+        {key:'quantity',name:'數量',type:'number'},
+        {key:'description',name:'詳細描述',type:'textarea',maxLen:300},
+        {key:'category',name:'類別',type:'text'},
+        {key:'remarks',name:'備註',type:'text'},
+        {key:'brief_intro',name:'物品簡介',type:'text',maxLen:20}
+      ],
+      rows:[]
+    },
+    technique:{
+      uid:'sheet_technique',name:'擴展術式表',
+      prompt:`# 術式表填充規則
+從本次內容提取**新登場**的術式/能力/技能。若無新術式則輸出空陣列[]。
+
+## 欄位
+- tech_name: 術式/能力名稱（**必填**）
+- tech_type: 類別 — 從選項中選：[術式擴張|戰技|反轉術式|術式反轉|虛式|極之番]
+- proficiency: 熟練度/階段 — 如「初學」「精通」「極限」
+- effect_desc: 效果描述（**必填**） — 300字以內，說明術式的原理和效果
+- brief_intro: 簡介 — 20字以內濃縮
+
+## 鐵則
+1. 只從內容提取，不要編造
+2. 無法判斷的欄位留空字串""`,
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'tech_name',name:'術式/能力名稱',type:'text'},
+        {key:'tech_type',name:'類別',type:'select',options:['術式擴張','戰技','反轉術式','術式反轉','虛式','極之番']},
+        {key:'proficiency',name:'熟練度/階段',type:'text'},
+        {key:'effect_desc',name:'效果描述',type:'textarea',maxLen:300},
+        {key:'brief_intro',name:'簡介',type:'text',maxLen:20}
+      ],
+      rows:[]
+    }
+  }
+};
+const GEN_TEMPLATE = {
+  id:'gen_default',name:'通用模板',builtin:true,
+  sheets:{
+    chronicle:{
+      uid:'sheet_chronicle',name:'紀要表',
+      prompt:`# 紀要表填充規則
+你必須從本次內容產出一條新條目。所有欄位值都必須是**單一字串**，重要對白多句時以換行符(\\n)串聯。
+
+## 必填
+- time_span: 時間跨度 — 精確的時間範圍
+- location: 地點 — 事件發生位置
+- chronicle: 紀要 — 200~450字客觀敘述，禁止結尾昇華
+- summary: 概覽 — 50字以內濃縮
+- important_lines: 重要對白 — 單一字串，多句以\\n串接
+- code_index: 編碼索引 — 自動編號
+
+## 禁止：編造、markdown包裝、使用陣列
+用繁體中文。`,
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'time_span',name:'時間跨度',type:'text'},
+        {key:'location',name:'地點',type:'text'},
+        {key:'chronicle',name:'紀要',type:'textarea',maxLen:450},
+        {key:'summary',name:'概覽',type:'text',maxLen:100},
+        {key:'important_lines',name:'重要對白',type:'textarea',maxLen:200},
+        {key:'code_index',name:'編碼索引',type:'text'}
+      ],
+      rows:[]
+    },
+    custom:{
+      uid:'sheet_custom',name:'自訂表',
+      prompt:'提取本次內容中值得記錄的資料。欄位包含 field1、field2、field3。若無則輸出空陣列。',
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'field1',name:'欄位1',type:'text'},
+        {key:'field2',name:'欄位2',type:'text'},
+        {key:'field3',name:'欄位3',type:'textarea'}
+      ],
+      rows:[]
+    }
+  }
+};
+const MAGIC_SCHOOL_TEMPLATE = {
+  id:'magic_school',name:'魔法學園',builtin:true,
+  sheets:{
+    chronicle:{
+      uid:'sheet_chronicle',name:'紀要表',
+      prompt:'# 紀要表填充規則\n從本次內容產出一條新條目。所有欄位值都是**單一字串**，對白多句以換行符(\\n)串聯。用繁體中文。\n\n## 必填\n- time_span: 時間 — 如「2月1日，早上9:05」\n- location: 地點 — 如「訓練場」「教室」\n- chronicle: 紀要 — 150~400字客觀敘述\n- summary: 概覽 — 50字內濃縮\n- important_lines: 重要對白 — 標註說話者，多句以\\n串接\n- code_index: 編碼索引\n\n## 禁止：編造、markdown包裝、使用陣列',
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'time_span',name:'時間',type:'text'},
+        {key:'location',name:'地點',type:'text'},
+        {key:'chronicle',name:'紀要',type:'textarea',maxLen:400},
+        {key:'summary',name:'概覽',type:'text',maxLen:100},
+        {key:'important_lines',name:'重要對白',type:'textarea',maxLen:200},
+        {key:'code_index',name:'編碼索引',type:'text'}
+      ],rows:[]
+    },
+    character:{
+      uid:'sheet_character',name:'角色表',
+       prompt:'# 角色表填充規則\n從本次內容提取**新登場**或**有新資訊**的角色。若無新角色輸出空陣列[]。\n\n## 必填\n- name: 姓名（必須）\n- magic_type: 魔法類型 — [超能系|自然系|療癒系]\n- brief_intro: 人物簡介 — 角色定位與背景介紹（依內容篇幅而定）\n\n## 選填（從內容推斷，無法判斷留空字串""）\n- alias: 別稱/綽號\n- gender_age: 性別/年齡\n- grade_class: 年級/班級 — 如「一年一班」\n- personal_magic: 個人魔法名稱\n- magic_desc: 魔法能力描述\n- power_level: 戰力評級 — [D級|C級|準B級|B級|準A級|A級|準S級|S級]\n- weapons: 持有武器/魔神器\n- affiliation: 所屬 — 如「學生會」\n- current_status: 當前狀態\n- relationships: 人際關係\n\n## 鐵則\n1. 只從內容提取真實資訊，不要編造\n2. 無法判斷的欄位留空字串""\n3. 若角色已在「現有資料」列表中請輸出更新版（姓名必須保留）\n4. 人物簡介(brief_intro)必須合併新舊資訊，不可直接覆蓋。將本次新增的資訊追加到既有簡介中，保留原有內容。',
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'name',name:'姓名',type:'text'},
+        {key:'alias',name:'別稱',type:'text'},
+        {key:'gender_age',name:'性別/年齡',type:'text'},
+        {key:'grade_class',name:'年級/班級',type:'text'},
+        {key:'magic_type',name:'魔法類型',type:'select',options:['超能系','自然系','療癒系']},
+        {key:'personal_magic',name:'個人魔法',type:'text'},
+        {key:'magic_desc',name:'魔法描述',type:'textarea',maxLen:300},
+        {key:'power_level',name:'戰力評級',type:'select',options:['D級','C級','準B級','B級','準A級','A級','準S級','S級']},
+        {key:'weapons',name:'武器/魔神器',type:'text'},
+        {key:'affiliation',name:'所屬',type:'text'},
+        {key:'current_status',name:'當前狀態',type:'text',maxLen:30},
+        {key:'relationships',name:'人際關係',type:'textarea'},
+        {key:'brief_intro',name:'人物簡介',type:'textarea',maxLen:500}
+      ],rows:[]
+    },
+    faction:{
+      uid:'sheet_faction',name:'勢力表',
+      prompt:'# 勢力表填充規則\n從本次內容提取**新登場**或**有新資訊**的組織/勢力。若無則輸出空陣列[]。\n\n## 欄位\n- faction_name: 名稱（**必填**）\n- type: 類型 — [班級|社團|學生組織|教師組|外部組織]\n- leader: 領導者\n- members: 主要成員/人數\n- description: 描述 — 200字以內\n- location: 位置\n- relationships: 與其他勢力關係\n\n## 鐵則\n1. 只從內容提取，不要編造\n2. 無法判斷欄位留空字串""',
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'faction_name',name:'名稱',type:'text'},
+        {key:'type',name:'類型',type:'select',options:['班級','社團','學生組織','教師組','外部組織']},
+        {key:'leader',name:'領導者',type:'text'},
+        {key:'members',name:'主要成員',type:'text'},
+        {key:'description',name:'描述',type:'textarea',maxLen:200},
+        {key:'location',name:'位置',type:'text'},
+        {key:'relationships',name:'關係',type:'text'}
+      ],rows:[]
+    },
+    magic:{
+      uid:'sheet_magic',name:'魔法/能力表',
+      prompt:'# 魔法表填充規則\n從本次內容提取**新登場**的魔法/術式/能力。若無輸出空陣列[]。\n\n## 欄位\n- magic_name: 魔法名稱（**必填**）\n- user: 使用者（**必填**）\n- magic_type: 類別 — [個人魔法|通用魔法|結界|領域|規則之力|其他]\n- element: 屬性 — [火|水|風|土|雷|光|闇|無|其他]\n- effect_desc: 效果描述 — 300字以內（**必填**）\n- restrictions: 限制/代價\n- proficiency: 熟練度 — 如「初學」「精通」\n\n## 鐵則：只從內容提取，不要編造',
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'magic_name',name:'魔法名稱',type:'text'},
+        {key:'user',name:'使用者',type:'text'},
+        {key:'magic_type',name:'類別',type:'select',options:['個人魔法','通用魔法','結界','領域','規則之力','其他']},
+        {key:'element',name:'屬性',type:'select',options:['火','水','風','土','雷','光','闇','無','其他']},
+        {key:'effect_desc',name:'效果描述',type:'textarea',maxLen:300},
+        {key:'restrictions',name:'限制/代價',type:'textarea'},
+        {key:'proficiency',name:'熟練度',type:'text'}
+      ],rows:[]
+    },
+    item:{
+      uid:'sheet_item',name:'物品/魔神器表',
+      prompt:'# 物品表填充規則\n從本次內容提取**新登場**的重要物品/武器/魔神器。若無輸出空陣列[]。\n\n## 欄位\n- item_name: 物品名稱（**必填**）\n- type: 類型 — [武器|魔神器|防具|道具|消耗品]\n- owner: 持有者\n- description: 描述 — 200字以內\n- abilities: 特殊能力/效果\n- rarity: 稀有度 — 如「普通」「稀有」「傳說」\n\n## 鐵則：只從內容提取，不要編造',
+      columns:[
+        {key:'row_id',name:'row_id',type:'hidden'},
+        {key:'item_name',name:'物品名稱',type:'text'},
+        {key:'type',name:'類型',type:'select',options:['武器','魔神器','防具','道具','消耗品']},
+        {key:'owner',name:'持有者',type:'text'},
+        {key:'description',name:'描述',type:'textarea',maxLen:200},
+        {key:'abilities',name:'特殊能力',type:'text'},
+        {key:'rarity',name:'稀有度',type:'text'}
+      ],rows:[]
+    }
+  }
+};
+
+// ============ STORYSTORE MODULE ============
+// Deep module: encapsulates all app state behind a small interface, with event-driven UI updates
+const app = (()=>{
+  // --- Private state ---
+  let _stories=[];
+  let _currentStoryId=null;
+  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b'};
+  let _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE];
+  const _tabOrder=['docs','chronicle','timeline','character','faction','item','magic','technique','foreshadow','chat','templates','errorlog'];
+  const _tabLabels={'docs':'📂文檔','chronicle':'📋紀要表','timeline':'📈時間線','character':'👤角色','faction':'🏛勢力','item':'📦物品','magic':'✨魔法','technique':'⚡術式','foreshadow':'🔮伏筆','chat':'💬AI聊天','templates':'📐模板','errorlog':'⚠錯誤日誌'};
+  let _saveTimer=null;
+
+  // --- Event system ---
+  const _listeners={};
+  function on(ev,fn){
+    (_listeners[ev]||(_listeners[ev]=[])).push(fn);
+    return ()=>{const i=_listeners[ev]?.indexOf(fn);if(i>=0)_listeners[ev].splice(i,1)};
+  }
+  function emit(ev,...args){
+    (_listeners[ev]||[]).forEach(fn=>fn(...args));
+  }
+
+  // --- Persistence ---
+  function save(){
+    clearTimeout(_saveTimer);
+    try{
+      localStorage.setItem('storyApp',JSON.stringify({
+        stories:_stories, currentStoryId:_currentStoryId,
+        templates:_templates, settings:_settings
+      }));
+    }catch(e){}
+  }
+  function load(){
+    try{
+      const d=localStorage.getItem('storyApp');
+      if(!d)return;
+      const p=JSON.parse(d);
+      if(p.stories)_stories=p.stories;
+      if(p.currentStoryId!=null)_currentStoryId=p.currentStoryId;
+      // Merge: keep user custom templates, always use latest builtins
+      if(p.templates){
+        const userTemplates=p.templates.filter(t=>!t.builtin);
+        _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE,...userTemplates];
+      }
+      if(p.settings)_settings={..._settings,...p.settings};
+    }catch(e){}
+  }
+  function debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(save,100)}
+
+  // --- Load persisted data ---
+  load();
+
+  // --- Public API ---
+  return {
+    // Story access
+    get stories(){return _stories},
+    set stories(v){_stories=v;debouncedSave()},
+    get currentStoryId(){return _currentStoryId},
+    set currentStoryId(v){_currentStoryId=v;emit('currentStoryChanged',v);debouncedSave()},
+    get currentStory(){
+      if(!_currentStoryId)return null;
+      return _stories.find(s=>s.id===_currentStoryId)||null;
+    },
+    getStory(id){return _stories.find(s=>s.id===id)},
+
+    // Settings
+    get settings(){return _settings},
+    set settings(v){_settings=v;debouncedSave()},
+
+    // Templates
+    get templates(){return _templates},
+    set templates(v){_templates=v;debouncedSave()},
+
+    // UI config (immutable)
+    get tabOrder(){return _tabOrder},
+    get tabLabels(){return _tabLabels},
+
+    // Events
+    on, emit,
+
+    // Persistence
+    save,
+    load,
+  };
+})();
+
+// ============ HELPER ============
+function clone(o){return JSON.parse(JSON.stringify(o))}
+function countTokens(text){const c=text.match(/[\u4e00-\u9fff\uff00-\uffef]/g)||[];const w=text.match(/[a-zA-Z0-9]+/g)||[];return Math.ceil(c.length*1.5+w.length*1.3)}
+function splitSentences(text){
+  const re=/([^。！？\.!\?\n]+[。！？\.!\?\n]?)/g;
+  const m=text.match(re);
+  if(!m)return text.trim()?[text.trim()]:[];
+  return m.map(s=>s.trim()).filter(s=>s.length>0);
+}
+function formatDate(d){const dt=new Date(d);return dt.toISOString().slice(0,16).replace('T',' ')}
+function nextCode(rows){const n=rows.length;return 'AM'+String(n+1).padStart(4,'0')}
+function getSheet(story,sid){return story.sheets[sid]||null}
+function getSheetByUid(story,uid){return Object.values(story.sheets).find(s=>s.uid===uid)}
+
+// ============ CREATE STORY ============
+function newStory(){
+  const name=prompt('輸入故事名稱：');
+  if(!name)return;
+  // Show template selection
+  let html='<div style="margin-bottom:12px;font-size:14px;font-weight:600">選擇故事模板</div>';
+  html+='<div style="display:flex;flex-wrap:wrap;gap:10px">';
+  for(const t of app.templates){
+    const sheetCount=Object.keys(t.sheets).length;
+    const sheetNames=Object.values(t.sheets).map(s=>s.name).join('、');
+    html+=`<div class="template-card" onclick="createStoryWithTemplate('${t.id}','${escHtml(name)}')" style="cursor:pointer;width:160px;padding:12px;border:1px solid var(--border);border-radius:8px;text-align:center;transition:0.2s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div style="font-weight:600;font-size:14px;color:var(--accent);margin-bottom:4px">${escHtml(t.name)}</div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:6px">${t.builtin?'內建':'自訂'} • ${sheetCount} 個表格</div>
+      <div style="font-size:10px;color:var(--text3);line-height:1.4">${escHtml(sheetNames)}</div>
+    </div>`;
+  }
+  html+='</div>';
+  showModal('建立新故事：'+escHtml(name),html);
+}
+function createStoryWithTemplate(tmplId,name){
+  closeModal();
+  const tmpl=app.templates.find(t=>t.id===tmplId)||app.templates[0];
+  const sheets={};
+  for(const [k,v] of Object.entries(tmpl.sheets)){
+    sheets[k]={uid:v.uid,name:v.name,columns:clone(v.columns),rows:[]};
+  }
+  const story={
+    id:uid(),name,templateId:tmpl.id,
+    created:new Date().toISOString(),
+    doc:[],
+    sheets,
+    timeline:{tracks:[{id:'main',name:'主線',color:'#6c8cff',events:[]},{id:'branch1',name:'支線A',color:'#ffc857',events:[]},{id:'branch2',name:'支線B',color:'#4caf7d',events:[]}]},
+    foreshadow:[]
+  };
+  app.stories.push(story);
+  app.currentStoryId=story.id;
+  app.save();
+  renderAll();
+}
+
+function switchStory(id){
+  if(!id){app.currentStoryId=null;renderAll();return}
+  app.currentStoryId=id;app.save();renderAll();
+}
+
+function deleteStory(id){
+  if(!confirm('確認刪除此故事？此操作不可復原！'))return;
+  app.stories=app.stories.filter(s=>s.id!==id);
+  if(app.currentStoryId===id)app.currentStoryId=app.stories[0]?.id||null;
+  app.save();renderAll();
+}
+function deleteCurrentStory(){
+  const story=app.currentStory;
+  if(!story)return alert('請先選擇一個故事');
+  deleteStory(story.id);
+}
+
+// ============ DOCUMENT / BATCH ============
+function importDocument(){
+  const story=app.currentStory;
+  if(!story)return alert('請先選擇或建立一個故事');
+  const input=document.createElement('input');input.type='file';input.accept='.txt,.md,.json';
+  input.onchange=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    const name=file.name.replace(/\.(txt|md|json)$/,'')||('文檔'+(story.doc.length+1));
+    const text=await file.text();
+    if(!text.trim())return alert('檔案內容為空');
+    addDocument(story,name,text);
+  };
+  input.click();
+}
+
+function addDocument(story,name,text){
+  const doc={id:uid(),name,text,imported:new Date().toISOString(),batches:[]};
+  const tokenLimit=app.settings.tokenLimit;
+  const sents=splitSentences(text);
+  let batch=null;
+  for(const sent of sents){
+    const t=countTokens(sent);
+    if(t>tokenLimit){
+      if(batch){doc.batches.push(batch);batch=null}
+      doc.batches.push({id:uid(),text:sent,tokens:t,status:'pending'});
+      continue;
+    }
+    if(!batch){batch={id:uid(),text:sent,tokens:t,status:'pending'}}
+    else{
+      const nt=batch.tokens+t;
+      if(nt<=tokenLimit){batch.text+='\n'+sent;batch.tokens=nt}
+      else{doc.batches.push(batch);batch={id:uid(),text:sent,tokens:t,status:'pending'}}
+    }
+  }
+  if(batch)doc.batches.push(batch);
+  story.doc.push(doc);
+  app.save();renderAll();
+}
+
+function splitDocument(docIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const tokenLimit=app.settings.tokenLimit;
+  const sents=splitSentences(doc.text);
+  doc.batches=[];
+  let batch=null;
+  for(const sent of sents){
+    const t=countTokens(sent);
+    if(t>tokenLimit){
+      if(batch){doc.batches.push(batch);batch=null}
+      doc.batches.push({id:uid(),text:sent,tokens:t,status:'pending'});
+      continue;
+    }
+    if(!batch){batch={id:uid(),text:sent,tokens:t,status:'pending'}}
+    else{
+      const nt=batch.tokens+t;
+      if(nt<=tokenLimit){batch.text+='\n'+sent;batch.tokens=nt}
+      else{doc.batches.push(batch);batch={id:uid(),text:sent,tokens:t,status:'pending'}}
+    }
+  }
+  if(batch)doc.batches.push(batch);
+}
+
+// ============ BATCH RUNNER MODULE ============
+// Encapsulates queue state; functions kept in-place but reference module
+const BatchState = (() => {
+  let q=[], c=false;
+  return {
+    enqueue(di,bi){ q.push({docIdx:di,batchIdx:bi}); },
+    shift(){ return q.shift(); },
+    reset(){ q=[]; c=false; },
+    cancel(){ c=true; q=[]; },
+    get cancelled(){ return c; },
+    set cancelled(v){ c=v; },
+    get length(){ return q.length; },
+  };
+})();
+
+function enqueueBatch(docIdx,batchIdx){
+  BatchState.enqueue(docIdx,batchIdx);
+}
+
+function processNextInQueue(){
+  if(BatchState.cancelled||BatchState.length===0){
+    if(BatchState.length===0&&!BatchState.cancelled){
+      renderAll();
+    }
+    BatchState.reset();
+    renderAll();
+    return;
+  }
+  const item=BatchState.shift();
+  _runBatchWithQueue(item.docIdx,item.batchIdx);
+}
+
+function stopBatchProcessing(){
+  BatchState.cancel();
+  // Reset any processing batches to pending
+  const story=app.currentStory;
+  if(story){
+    for(const d of story.doc)
+      for(const b of d.batches)
+        if(b.status==='processing')b.status='pending';
+  }
+  app.save();renderAll();
+}
+
+function _runBatchWithQueue(docIdx,batchIdx){
+  if(BatchState.cancelled){processNextInQueue();return}
+  const story=app.currentStory;
+  if(!story){processNextInQueue();return}
+  const doc=story.doc[docIdx];if(!doc){processNextInQueue();return}
+  const batch=doc.batches[batchIdx];if(!batch){processNextInQueue();return}
+  batch.status='processing';renderAll();
+  batch._startTime=Date.now();
+  batch._streamStartTime=0;
+
+  const chronicle=getSheet(story,'chronicle');
+  if(!chronicle){processNextInQueue();return}
+
+  const prompt=generateBatchPrompt(story,batch);
+  batch._prompt=prompt;
+  const mode=app.settings.aiProvider;
+
+  const doneOne=()=>{
+    if(!BatchState.cancelled)processNextInQueue();
+    else processNextInQueue();
+  };
+
+  if(mode==='prompt'){
+    navigator.clipboard.writeText(prompt).then(()=>{
+      showModal('批次 Prompt（已複製到剪貼簿）',`<textarea class="code" style="height:300px" readonly>`+escHtml(prompt)+`</textarea>
+      <p style="font-size:13px;color:var(--text2)">將以上 prompt 貼到 AI 後，把回覆貼回這裡：</p>
+      <textarea id="aiResponse" style="height:150px" placeholder="貼入 AI 回覆..."></textarea>
+      <div class="actions"><button class="btn" onclick="applyBatchResponse(${docIdx},${batchIdx})">套用回覆</button><button class="btn btn-outline" onclick="closeModal()">取消</button></div>`);
+    }).catch(()=>{
+      showModal('批次 Prompt','<textarea class="code" style="height:300px" readonly>'+escHtml(prompt)+'</textarea><div class="actions"><button class="btn" onclick="closeModal()">關閉</button></div>');
+    });
+  } else if(mode==='ollama'){
+    // Only show panel if live stream is toggled on
+    if(StreamState.el){
+      showStreamPanel(docIdx,batchIdx,prompt);
+    }
+    callOllamaStream(prompt,'批次處理',(fullText,delta,done)=>{
+      // Ensure panel tracks this batch (handles late panel open)
+      if(StreamState.el&&(StreamState.docIdx!==docIdx||StreamState.batchIdx!==batchIdx)){
+        StreamState.docIdx=docIdx;StreamState.batchIdx=batchIdx;
+        if(delta&&StreamState.statusEl)StreamState.statusEl.innerHTML='📡 串流中...';
+      }
+      // Record stream start on first real token
+      if(delta&&batch&&!batch._streamStartTime)batch._streamStartTime=Date.now();
+      const outEl=StreamState.outEl;
+      const statusEl=StreamState.statusEl;
+      if(outEl){
+        if(outEl.textContent&&/^\s*⏳/.test(outEl.textContent)){
+          outEl.textContent='';
+          if(statusEl&&!statusEl.textContent.includes('📡'))statusEl.innerHTML='📡 串流中...';
+        }
+        outEl.textContent=fullText;
+        outEl.scrollTop=outEl.scrollHeight;
+      }
+      // Start live timer on first token
+      if(delta&&!StreamState._timer){
+        StreamState._lastOutput=fullText;
+        StreamState._timer=setInterval(()=>{
+          const se=StreamState.statusEl;
+          if(!se)return;
+          const elapsed=Date.now()-(batch._startTime||Date.now());
+          const streamElapsed=Date.now()-(batch._streamStartTime||Date.now());
+          let text='⏱ '+formatTime(elapsed);
+          if(streamElapsed>2000){
+            const curLen=StreamState._lastOutput.length;
+            if(curLen>10){
+              const speed=curLen/(streamElapsed/1000);
+              const ratio=Metrics.getAvgOutputRatio();
+              const estimatedTotal=Math.max(curLen,(batch._prompt?.length||0)*ratio);
+              const remain=(estimatedTotal-curLen)/speed;
+              if(remain>0&&remain<3600)text+=' · 預計剩 '+formatTime(remain*1000);
+            }
+          }
+          if(se.innerHTML!==text)se.innerHTML=text;
+        },1000);
+      }
+      StreamState._lastOutput=fullText;
+      if(done){
+        // Stop live timer
+        if(StreamState._timer){clearInterval(StreamState._timer);StreamState._timer=null}
+        // Record timing metrics
+        const dur=Date.now()-(batch._startTime||Date.now());
+        batch.duration=dur;
+        if(fullText)Metrics.add(batch._prompt?.length||0,fullText.length,dur);
+        app.save();
+        if(statusEl)statusEl.textContent='✅ 完成';
+        // Save stream log for later viewing
+        if(batch&&fullText)batch._streamLog=fullText;
+        try{
+          const cleaned=extractJsonFromResponse(fullText);
+          const parsed=JSON.parse(cleaned);
+          applyBatchResponseRaw(docIdx,batchIdx,parsed);
+          if(statusEl)statusEl.innerHTML='✅ 處理完成（'+formatTime(dur)+'）';
+        }catch(e2){
+          logAiError('批次 JSON 解析',prompt,fullText,e2.message);
+          batch.status='pending';renderAll();
+          if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗，請手動修正<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+        }
+        // Delay so user can see result before next batch overwrites panel
+        setTimeout(()=>doneOne(),2000);
+      }
+    }).catch(e=>{
+      const outEl=StreamState.outEl;
+      const statusEl=StreamState.statusEl;
+      if(outEl)outEl.textContent='❌ 串流失敗 ('+e.message+')，改用非串流...';
+      if(statusEl)statusEl.innerHTML='❌ 串流失敗，降級至非串流...';
+      return callOllama(prompt,'批次處理').then(resp=>{
+        if(resp&&resp.response){
+          if(outEl)outEl.textContent=resp.response;
+          if(statusEl)statusEl.textContent='✅ 完成（非串流）';
+          if(batch)batch._streamLog=resp.response;
+          batch.duration=Date.now()-(batch._startTime||Date.now());
+          try{
+            const cleaned=extractJsonFromResponse(resp.response);
+            const parsed=JSON.parse(cleaned);
+            applyBatchResponseRaw(docIdx,batchIdx,parsed);
+            if(statusEl)statusEl.innerHTML='✅ 處理完成（非串流）';
+          }catch(e2){
+            batch.status='pending';renderAll();
+            if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗（非串流）<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+          }
+        }else{
+          batch.status='pending';renderAll();
+          if(statusEl)statusEl.innerHTML='❌ 空回覆 — Ollama 未回傳內容';
+        }
+        setTimeout(()=>doneOne(),2000);
+      }).catch(e=>{
+        if(outEl)outEl.textContent='❌ 失敗：'+e.message;
+        if(statusEl)statusEl.textContent='❌ 失敗';
+        batch.status='pending';renderAll();
+        setTimeout(()=>doneOne(),2000);
+      });
+    });
+  } else {
+    alert('請先設定 AI 後端（設定中選擇模式）。目前使用 prompt 模式。');
+    batch.status='pending';renderAll();
+    doneOne();
+  }
+}
+
+function processBatch(docIdx,batchIdx){
+  enqueueBatch(docIdx,batchIdx);
+  if(BatchState.length===1)processNextInQueue();
+}
+
+function generateBatchPrompt(story,batch){
+  const tmpl=app.templates.find(t=>t.id===story.templateId);
+  if(!tmpl)return batch.text;
+
+  // Chronicle context (recent entries)
+  const chronicle=getSheet(story,'chronicle');
+  const recent=chronicle?chronicle.rows.slice(-20):[];
+  let ctx='';
+  for(const r of recent){
+    ctx+=`- [${r.code_index||'?'}] ${r.time_span||'?'} | ${r.summary||r.chronicle?.slice(0,80)||'?'}\n`;
+  }
+
+  // Build per-sheet prompt sections (template-driven)
+  let sheetSections='';
+  const outputFields=[];
+  for(const [key,sheet] of Object.entries(tmpl.sheets)){
+    const data=getSheet(story,key);
+    const existing=data?data.rows.length:0;
+    const fields=sheet.columns.filter(c=>c.type!=='hidden'&&c.key!=='row_id');
+
+    if(sheet.prompt){
+      // Show existing entries for context
+      sheetSections+=`\n---\n## ${sheet.name}（現有 ${existing} 筆）\n`;
+      if(data&&data.rows.length>0){
+        sheetSections+=`現有資料（請合併/更新，勿直接覆蓋）：\n`;
+        for(const r of data.rows){
+          sheetSections+=`- `;
+          const parts=[];
+          for(const f of fields){
+            const val=r[f.key];
+            if(val&&val.trim()){
+              const v=val.length>100?val.slice(0,100)+'…':val;
+              parts.push(`${f.key}=${v}`);
+            }
+          }
+          sheetSections+=parts.join(' | ')+'\n';
+        }
+      }
+      sheetSections+=`欄位：${fields.map(c=>c.name+'('+c.key+')').join(', ')}\n`;
+      sheetSections+=`${sheet.prompt}\n`;
+      // Merge instructions for key fields
+      if(key==='character'){
+        sheetSections+=`\n角色合併規則：若角色已存在，請**合併新資訊**到對應欄位。尤其人物簡介(brief_intro)必須保留既有內容並追加新資訊，不可直接覆蓋。其他欄位也優先保留既有值、僅補充本次新增的資訊。\n`;
+      }
+      sheetSections+=`輸出時物件必須使用上述**指定欄位key（括號內的英文key）**，不可使用其他key。若無新資料則輸出空陣列[]。\n`;
+    }
+    outputFields.push(key);
+  }
+
+  // Foreshadowing section — include existing so LLM doesn't duplicate
+  let foreshadowSection=`\n## 伏筆\n`;
+  if(story.foreshadow&&story.foreshadow.length>0){
+    foreshadowSection+=`**已有伏筆（請勿重複提取）：**\n`;
+    for(const f of story.foreshadow){
+      foreshadowSection+=`- [${f.status}] ${f.text}（關鍵字：${f.keyword||'無'}）\n`;
+    }
+    foreshadowSection+=`\n請從本次內容中提取**新的**潛在伏筆（不可與以上重複），每筆包含 text（內容）和 keyword（關鍵字）。若無則輸出空陣列。`;
+  }else{
+    foreshadowSection+=`請從本次內容中提取潛在伏筆（懸念、謎題、未解釋事件），每筆包含 text（內容）和 keyword（關鍵字）。若無則輸出空陣列。`;
+  }
+  sheetSections+=foreshadowSection;
+
+  // Dynamic output format
+  const formatParts=['"chronicle":{"time_span":"","location":"","chronicle":"","summary":"","important_lines":"","code_index":""}'];
+  for(const key of outputFields){
+    if(key==='chronicle')continue;
+    formatParts.push(`"${key}":[]`);
+  }
+  formatParts.push('"foreshadowing":[]');
+  const outputFmt='{\n  '+formatParts.join(',\n  ')+'\n}';
+
+  return `你是故事紀要工具。基於以下故事內容，依模板提示產出完整分析。
+
+## 最近紀要條目（供參考）
+${ctx||'（尚無條目）'}
+${sheetSections}
+
+## 本次批次內容
+${batch.text}
+
+## 輸出格式（純 JSON，無 markdown 包裝，無額外文字）
+${outputFmt}`;
+}
+
+// Strip markdown ```json ... ``` wrappers from LLM output, with JSON repair
+function extractJsonFromResponse(text){
+  if(!text)return text;
+  let t=text.trim();
+  // Remove markdown code block wrapper
+  const md=t.match(/^\x60\x60\x60\s*(?:json|JSON)?\s*([\s\S]*?)\x60\x60\x60$/);
+  if(md)t=md[1].trim();
+  else t=t.replace(/^\x60\x60\x60\s*(?:json|JSON)?\s*/,'').replace(/\s*\x60\x60\x60$/,'');
+  t=t.trim();
+  if(!t)return t;
+
+  // Try to parse; if it fails, attempt repair
+  try{JSON.parse(t);return t}catch(e1){
+    // Repair: fix "key": "val1", "val2", "val3" → "key": "val1\\nval2\\nval3"
+    // This heals the common LLM mistake of outputting multiple unlabeled strings
+    let fixed=t;
+    for(let pass=0;pass<5;pass++){
+      const before=fixed;
+      // Repair 3+ consecutive bare strings: "s1", "s2", "s3"  → "s1\\ns2\\ns3"
+      fixed=fixed.replace(/"([^"]*)",\s*"([^"]*)",\s*"([^"]*)"/g,'"$1\\n$2\\n$3"');
+      // Repair 2 consecutive bare strings: "s1", "s2"  → "s1\\ns2"
+      fixed=fixed.replace(/"([^"]*)",\s*"([^"]*)"\s*(?=[,}\]])/g,'"$1\\n$2"');
+      if(fixed===before)break;
+      try{JSON.parse(fixed);return fixed}catch(e2){}
+    }
+    return t; // Return original if all repairs fail
+  }
+}
+
+function applyBatchResponse(docIdx,batchIdx){
+  const ta=document.getElementById('aiResponse');
+  if(!ta)return;
+  try{
+    const cleaned=extractJsonFromResponse(ta.value);
+    const resp=JSON.parse(cleaned);
+    applyBatchResponseRaw(docIdx,batchIdx,resp);
+    closeModal();
+  }catch(e){
+    alert('JSON 解析失敗，請確認回覆是有效 JSON：'+e.message);
+  }
+}
+
+function applyBatchResponseRaw(docIdx,batchIdx,resp){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const batch=doc.batches[batchIdx];if(!batch)return;
+  const chronicle=getSheet(story,'chronicle');
+  if(!chronicle)return;
+
+  // --- 1. Process chronicle entry ---
+  const chData=resp.chronicle||resp;
+  const row={
+    row_id:chronicle.rows.length+1,
+    time_span:chData.time_span||'',
+    location:chData.location||'',
+    chronicle:chData.chronicle||'',
+    summary:chData.summary||'',
+    important_lines:chData.important_lines||'',
+    code_index:chData.code_index||nextCode(chronicle.rows),
+    _batchId:batch.id
+  };
+  chronicle.rows.push(row);
+
+  // --- 2. Process all other sheets (template-driven) ---
+  const tmpl=app.templates.find(t=>t.id===story.templateId);
+  if(tmpl){
+    for(const [key,sheet] of Object.entries(tmpl.sheets)){
+      if(key==='chronicle')continue;
+      const items=resp[key]||[];
+      if(Array.isArray(items)&&items.length)upsertSheetItems(story,key,items);
+    }
+  }
+
+  // --- 3. Process foreshadowing ---
+  if(resp.foreshadowing&&Array.isArray(resp.foreshadowing)){
+    for(const f of resp.foreshadowing){
+      if(!f.text)continue;
+      const exists=story.foreshadow.find(e=>e.text===f.text||(f.keyword&&e.keyword===f.keyword));
+      if(!exists){
+        story.foreshadow.push({
+          id:uid(),text:f.text,keyword:f.keyword||'',
+          status:'unresolved',created:formatDate(new Date()),resolvedIn:''
+        });
+      }
+    }
+  }
+
+  // --- 4. Auto-detect foreshadowing resolution ---
+  for(const f of story.foreshadow){
+    if(f.status==='unresolved'){
+      const combined=chData.chronicle+' '+chData.summary+' '+chData.important_lines;
+      if(combined.includes(f.text.slice(0,10))||combined.includes(f.keyword||'')){
+        f.status='resolved';f.resolvedIn=row.code_index;
+      }
+    }
+  }
+
+  // --- 5. Timeline is now post-processing (use AI button in timeline tab) ---
+
+  batch.status='done';batch.result=row;
+  app.save();renderAll();
+}
+
+// Helper: upsert items into a sheet (characters/factions/items/techniques)
+function upsertSheetItems(story,sheetKey,items){
+  if(!items||!items.length)return;
+  const sheet=getSheet(story,sheetKey);
+  if(!sheet)return;
+
+  // Map LLM output keys to template column keys
+  // LLM often uses generic 'name'/'description' but template has specific keys
+  function mapField(item,col){
+    // Direct match first
+    if(item[col.key]!=null)return item[col.key];
+    // Map common LLM field names to template columns
+    const name=col.key.toLowerCase();
+    // Generic 'name' field → any column with 'name' in key (faction_name, item_name, tech_name, name)
+    if((name==='faction_name'||name==='item_name'||name==='tech_name'||name==='name')&&item.name!=null)return item.name;
+    // Generic 'description' → description/effect_desc/chronicle/brief_intro
+    if((name==='description'||name==='effect_desc'||name==='chronicle'||name==='brief_intro')&&item.description!=null)return item.description;
+    // 'effect_desc' → also try 'effect' 
+    if(name==='effect_desc'&&item.effect!=null)return item.effect;
+    // 'brief_intro' → try 'intro'
+    if(name==='brief_intro'&&item.intro!=null)return item.intro;
+    // 'leader' → try 'leader'
+    // 'location' → try 'location'
+    // 'category' → try 'category'  
+    return '';
+  }
+
+  for(const item of items){
+    // Build mapped version of item data
+    const mapped={};
+    for(const c of sheet.columns){
+      mapped[c.key]=mapField(item,c);
+    }
+
+    // Dedup: check first visible text field
+    const firstVisCol=sheet.columns.find(c=>c.type!=='hidden'&&c.key!=='row_id');
+    const existing=firstVisCol?sheet.rows.find(r=>{
+      const newVal=(mapped[firstVisCol.key]||'').toLowerCase();
+      const oldVal=(r[firstVisCol.key]||'').toLowerCase();
+      return newVal&&oldVal&&newVal===oldVal;
+    }):null;
+
+    if(existing){
+      // Merge: update existing with non-empty new values
+      for(const c of sheet.columns){
+        if(c.type==='hidden'||c.key==='row_id')continue;
+        if(mapped[c.key])existing[c.key]=mapped[c.key];
+      }
+    }else{
+      const newRow={row_id:sheet.rows.length+1};
+      for(const c of sheet.columns){
+        if(c.key==='row_id')continue;
+        newRow[c.key]=mapped[c.key];
+      }
+      sheet.rows.push(newRow);
+    }
+  }
+}
+
+function clearBatchResult(docIdx,batchIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const batch=doc.batches[batchIdx];if(!batch)return;
+  if(!confirm('清除此批次的處理結果？'))return;
+  batch.status='pending';
+  delete batch.result;
+  // Remove the chronicle entry if exists
+  const chronicle=getSheet(story,'chronicle');
+  if(chronicle){
+    const idx=chronicle.rows.findIndex(r=>r._batchId===batch.id);
+    if(idx>=0)chronicle.rows.splice(idx,1);
+  }
+  app.save();renderAll();
+}
+
+function reprocessAllDone(){
+  const story=app.currentStory;if(!story)return;
+  if(!confirm('將所有已處理批次重設為待處理，可重新執行？'))return;
+  for(const d of story.doc){
+    for(const b of d.batches){
+      if(b.status==='done'){
+        b.status='pending';
+        delete b.result;
+      }
+    }
+  }
+  // Remove all chronicle entries linked to batches
+  const chronicle=getSheet(story,'chronicle');
+  if(chronicle)chronicle.rows=[];
+  app.save();renderAll();
+}
+
+function processAllBatches(){
+  const story=app.currentStory;if(!story)return;
+  let count=0;
+  BatchState.reset();
+  for(let di=0;di<story.doc.length;di++){
+    for(let bi=0;bi<story.doc[di].batches.length;bi++){
+      if(story.doc[di].batches[bi].status==='pending'){
+        BatchState.enqueue(di,bi);
+        count++;
+      }
+    }
+  }
+  if(count===0){alert('已無待處理批次');return}
+  if(!confirm('將依序處理 '+count+' 個批次，確定開始？'))return;
+  processNextInQueue();
+}
+
+// ============ AI CHAT ============
+function sendChat(){
+  const ta=document.getElementById('chatInput');
+  if(!ta||!ta.value.trim())return;
+  const msg=ta.value.trim();ta.value='';
+  const story=app.currentStory;
+  const box=document.getElementById('chatMessages');
+  if(!box)return;
+  box.insertAdjacentHTML('beforeend',`<div class="chat-msg user"><div class="label">你</div><div>${escHtml(msg)}</div></div>`);
+  box.scrollTop=box.scrollHeight;
+
+  const ctx=buildChatContext(story);
+  const fullPrompt=`以下是當前故事表格資料：\n${ctx}\n\n使用者的訊息：${msg}\n\n請根據表格資料回答或執行使用者的要求。`;
+
+  const mode=app.settings.aiProvider;
+  if(mode==='prompt'){
+    navigator.clipboard.writeText(fullPrompt).then(()=>{
+      box.insertAdjacentHTML('beforeend',`<div class="chat-msg ai"><div class="label">AI (Prompt 已複製)</div><div>Prompt 已複製到剪貼簿。貼到你的 AI 工具後，把回覆貼回下方：</div>
+        <textarea id="chatPaste" style="width:100%;height:60px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:13px" placeholder="貼入 AI 回覆..."></textarea>
+        <button class="btn btn-sm mt-8" onclick="applyChatPaste()">套用回覆</button></div>`);
+      box.scrollTop=box.scrollHeight;
+    }).catch(()=>{
+      box.insertAdjacentHTML('beforeend',`<div class="chat-msg ai"><div class="label">AI</div><pre>${escHtml(fullPrompt)}</pre></div>`);
+      box.scrollTop=box.scrollHeight;
+    });
+  } else if(mode==='ollama'){
+    const msgId='chatMsg_'+uid();
+    box.insertAdjacentHTML('beforeend',`<div class="chat-msg ai" id="${msgId}"><div class="label">AI</div><div class="chat-streaming" style="color:var(--text3)">⏳ 生成中...</div></div>`);
+    box.scrollTop=box.scrollHeight;
+    const msgEl=document.querySelector('#'+msgId+' div:last-child');
+    callOllamaStream(fullPrompt,'AI 對話',(fullText,delta,done)=>{
+      if(msgEl){
+        msgEl.textContent=fullText;
+        msgEl.style.color='var(--text)';
+        msgEl.classList.remove('chat-streaming');
+        box.scrollTop=box.scrollHeight;
+      }
+      if(done){
+        tryProcessChatAction(fullText);
+      }
+    }).catch(e=>{
+      if(msgEl)msgEl.innerHTML='<span style="color:var(--red)">錯誤：'+escHtml(e.message)+'</span>';
+      box.scrollTop=box.scrollHeight;
+    });
+  }
+}
+
+function applyChatPaste(){
+  const ta=document.getElementById('chatPaste');if(!ta)return;
+  const box=document.getElementById('chatMessages');if(!box)return;
+  const text=ta.value;
+  box.insertAdjacentHTML('beforeend',`<div class="chat-msg ai"><div class="label">AI 回覆</div><div>${escHtml(text)}</div></div>`);
+  ta.remove();box.scrollTop=box.scrollHeight;
+  tryProcessChatAction(text);
+}
+
+function tryProcessChatAction(text){
+  try{
+    const json=typeof text==='string'?JSON.parse(text):text;
+    if(json.action){
+      if(json.action==='update_row'&&json.sheet&&json.row&&json.data){
+        const story=app.currentStory;if(!story)return;
+        const sheet=getSheet(story,json.sheet);
+        if(sheet&&sheet.rows[json.row-1]){
+          Object.assign(sheet.rows[json.row-1],json.data);
+          app.save();renderAll();
+        }
+      }
+      if(json.action==='add_row'&&json.sheet&&json.data){
+        const story=app.currentStory;if(!story)return;
+        const sheet=getSheet(story,json.sheet);
+        if(sheet){
+          json.data.row_id=sheet.rows.length+1;
+          sheet.rows.push(json.data);
+          app.save();renderAll();
+        }
+      }
+      if(json.action==='resolve_foreshadow'&&json.id){
+        const story=app.currentStory;if(!story)return;
+        const f=story.foreshadow.find(f=>f.id===json.id);
+        if(f){f.status='resolved';f.resolvedIn=json.batch||'chat';app.save();renderAll()}
+      }
+    }
+  }catch(e){}
+}
+
+function buildChatContext(story){
+  if(!story)return'（無故事）';
+  let s='';
+  for(const [k,v] of Object.entries(story.sheets)){
+    s+=`\n=== ${v.name} ===\n`;
+    if(v.rows.length===0){s+='（無資料）\n';continue}
+    const headers=v.columns.filter(c=>c.type!=='hidden').map(c=>c.name).join(' | ');
+    s+=headers+'\n';
+    for(const r of v.rows){
+      s+=v.columns.filter(c=>c.type!=='hidden').map(c=>r[c.key]||'').join(' | ')+'\n';
+    }
+  }
+  if(story.foreshadow.length){
+    s+=`\n=== 伏筆追蹤 ===\n`;
+    for(const f of story.foreshadow){
+      s+=`- ${f.text} [${f.status}]${f.status==='resolved'?' 解決於: '+f.resolvedIn:''}\n`;
+    }
+  }
+  return s;
+}
+
+// ============ OLLAMA ============
+// ============ AI ERROR LOG ============
+function logAiError(context,request,response,error){
+  const story=app.currentStory;
+  if(!story)return;
+  if(!story.errorLog)story.errorLog=[];
+  const reqStr=request==null?'':typeof request==='string'?request:JSON.stringify(request);
+  const respStr=response==null?'':typeof response==='string'?response:JSON.stringify(response);
+  story.errorLog.push({
+    id:uid(),time:new Date().toISOString(),context,
+    requestPreview:reqStr.slice(0,2000),
+    responsePreview:respStr.slice(0,2000)||'(空回覆)',
+    error:error||'',
+    fullRequest:reqStr,
+    fullResponse:respStr
+  });
+  if(story.errorLog.length>100)story.errorLog=story.errorLog.slice(-100);
+  app.save();
+}
+
+function renderErrorLogPanel(el){
+  const story=app.currentStory;
+  if(!story){el.innerHTML='';return}
+  const logs=story.errorLog||[];
+  let html=`<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
+    <span style="font-size:14px;font-weight:600;color:var(--red)">⚠ AI 錯誤日誌</span>
+    <span style="font-size:13px;color:var(--text2)">共 ${logs.length} 筆</span>
+    ${logs.length?`<button class="btn btn-sm btn-danger" onclick="clearErrorLog()">清空日誌</button>`:''}
+  </div>`;
+  if(logs.length===0){
+    html+='<div style="padding:20px;text-align:center;color:var(--text3)">尚無錯誤記錄</div>';
+    el.innerHTML=html;return;
+  }
+  for(let i=logs.length-1;i>=0;i--){
+    const log=logs[i];
+    html+=`<div style="background:var(--bg3);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:6px">`;
+    html+=`<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text3)">`;
+    html+=`<span>${escHtml(log.time)}</span><span>${escHtml(log.context)}</span></div>`;
+    if(log.error){
+      html+=`<div style="color:var(--red);font-size:13px;margin-top:4px">✗ ${escHtml(log.error)}</div>`;
+      if(log.error.includes('Failed to fetch')||log.error.includes('fetch'))
+        html+=`<div style="color:var(--orange);font-size:12px;margin-top:2px">💡 無法連線到 Ollama。請確認：<br>• Ollama 服務正在執行（<code style="background:var(--bg);padding:0 3px;border-radius:2px">ollama serve</code>）<br>• Ollama URL 設定正確（設定 → Ollama URL）</div>`;
+      else if(log.error.includes('HTTP'))
+        html+=`<div style="color:var(--orange);font-size:12px;margin-top:2px">💡 Ollama 回傳非預期狀態碼，請確認 API URL 和模型名稱正確</div>`;
+      else if(log.error.includes('空回覆'))
+        html+=`<div style="color:var(--orange);font-size:12px;margin-top:2px">💡 AI 回傳空內容，可能需要簡化批次內容或更換模型</div>`;
+    }
+    if(log.responsePreview)html+=`<div style="margin-top:4px;font-size:12px;color:var(--text2)"><strong>回覆：</strong>${escHtml(log.responsePreview)}</div>`;
+    html+=`<details style="margin-top:4px"><summary style="font-size:12px;color:var(--accent);cursor:pointer">查看完整內容</summary>`;
+    if(log.fullRequest)html+=`<pre style="background:var(--bg);padding:6px;border-radius:4px;margin-top:4px;font-size:11px;max-height:150px;overflow:auto">${escHtml(log.fullRequest.slice(0,2000))}</pre>`;
+    if(log.fullResponse)html+=`<pre style="background:var(--bg);padding:6px;border-radius:4px;margin-top:4px;font-size:11px;max-height:150px;overflow:auto">${escHtml(log.fullResponse.slice(0,2000))}</pre>`;
+    html+=`</details></div>`;
+  }
+  el.innerHTML=html;
+}
+
+function clearErrorLog(){
+  const story=app.currentStory;
+  if(!story||!confirm('確認清空錯誤日誌？'))return;
+  story.errorLog=[];
+  app.save();renderAll();
+}
+
+async function callOllama(prompt,context){
+  const url=app.settings.ollamaUrl;
+  const model=app.settings.ollamaModel;
+  try{
+    const resp=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model, prompt, stream:false})
+    });
+    if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
+    const data=await resp.json();
+    if(!data||!data.response){
+      const errMsg='空回覆或格式異常';
+      logAiError(context||'Ollama 呼叫',prompt,data,errMsg);
+      throw new Error(errMsg+'：'+JSON.stringify(data).slice(0,200));
+    }
+    return data;
+  }catch(e){
+    logAiError(context||'Ollama 呼叫',prompt,null,e.message);
+    throw e;
+  }
+}
+
+async function callOllamaStream(prompt,context,onToken){
+  const url=app.settings.ollamaUrl;
+  const model=app.settings.ollamaModel;
+  let fullText='';
+  let rawBuf='';
+  try{
+    const resp=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model, prompt, stream:true})
+    });
+    if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
+
+    // Fallback: if ReadableStream not available, read as text
+    if(!resp.body||!resp.body.getReader){
+      const text=await resp.text();
+      rawBuf=text;
+      // Try to extract response via simple regex or parse as non-streaming JSON
+      try{
+        const data=JSON.parse(text);
+        if(data.response)fullText=data.response;
+      }catch(e){fullText=text}
+      if(fullText)onToken(fullText,'',true);
+      else throw new Error('無法解析串流回覆');
+      return fullText;
+    }
+
+    const reader=resp.body.getReader();
+    const decoder=new TextDecoder();
+    let buf='';
+    let _tokLast=0; // last token display time for throttling
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=decoder.decode(value,{stream:true});
+      rawBuf=buf;
+      const lines=buf.split('\n');
+      buf=lines.pop()||'';
+      for(const line of lines){
+        const trimmed=line.trim();
+        if(!trimmed)continue;
+        try{
+          const chunk=JSON.parse(trimmed);
+          if(chunk.response!=null){
+            fullText+=chunk.response;
+            onToken(fullText,chunk.response,chunk.done||false);
+            // Throttle to ~30ms between token displays so browser has time to paint
+            const _now=Date.now();
+            const _elapsed=_now-_tokLast;
+            if(_elapsed<30&&_tokLast>0){
+              await new Promise(r=>setTimeout(r,30-_elapsed));
+            }
+            _tokLast=Date.now();
+          }else if(chunk.error){
+            throw new Error('Ollama 錯誤：'+chunk.error);
+          }
+          if(chunk.done){
+            if(chunk.done_reason==='load')throw new Error('模型載入中（冷啟動）');
+            break;
+          }
+        }catch(e){
+          if(e.message.startsWith('Ollama 錯誤')||e.message.includes('載入'))throw e;
+          // Malformed line — ignore, stream continues
+        }
+      }
+    }
+    if(buf.trim()){
+      try{
+        const chunk=JSON.parse(buf.trim());
+        if(chunk.response!=null){
+          fullText+=chunk.response;
+          onToken(fullText,chunk.response,true);
+        }
+      }catch(e){}
+    }
+    if(!fullText){
+      // If we got something in raw buffer but couldn't parse, send it raw
+      if(rawBuf.trim()){
+        fullText=rawBuf.trim();
+        onToken(fullText,'',true);
+      }else{
+        logAiError(context||'Ollama 串流',prompt,null,'串流結束但無內容');
+        throw new Error('串流結束但無內容');
+      }
+    }
+    return fullText;
+  }catch(e){
+    logAiError(context||'Ollama 串流',prompt,null,e.message);
+    throw e;
+  }
+}
+
+function formatTime(ms){
+  if(ms<1000)return '<1s';
+  const sec=Math.round(ms/1000);
+  if(sec<120)return sec+'s';
+  const min=Math.floor(sec/60);
+  const s=sec%60;
+  return min+'m'+s+'s';
+}
+
+// Metrics: records batch/timeline performance for ETA estimation
+const Metrics = (()=>{
+  let records=[];
+  return {
+    add(inputChars,outputChars,durationMs,type='batch'){
+      records.push({inputChars,outputChars,durationMs,type,time:Date.now()});
+    },
+    getAvgOutputRatio(){
+      const rs=records.filter(r=>r.type==='batch'&&r.inputChars>0);
+      if(!rs.length)return 0.15;
+      return rs.reduce((s,r)=>s+r.outputChars/r.inputChars,0)/rs.length;
+    },
+    getAvgCharSpeed(){
+      const rs=records.filter(r=>r.type==='batch'&&r.durationMs>0);
+      if(!rs.length)return 20;
+      const totalChars=rs.reduce((s,r)=>s+r.outputChars,0);
+      const totalMs=rs.reduce((s,r)=>s+r.durationMs,0);
+      return totalChars/(totalMs/1000);
+    },
+    estimateRemaining(inputChars,currentOutputChars,elapsedMs){
+      if(currentOutputChars<10)return null;
+      const ratio=this.getAvgOutputRatio();
+      const estimatedTotal=Math.max(currentOutputChars,inputChars*ratio);
+      const speed=currentOutputChars/(Math.max(elapsedMs,500)/1000);
+      const remainS=(estimatedTotal-currentOutputChars)/speed;
+      return remainS>0&&remainS<7200?Math.round(remainS):null;
+    }
+  };
+})();
+
+// Floating streaming panel (draggable, closable, replayable)
+const StreamState = (() => {
+  let st={el:null,id:0,docIdx:-1,batchIdx:-1,_timer:null,_lastOutput:''};
+  return {
+    get el(){return st.el}, set el(v){st.el=v},
+    get id(){return st.id}, set id(v){st.id=v},
+    get docIdx(){return st.docIdx}, set docIdx(v){st.docIdx=v},
+    get batchIdx(){return st.batchIdx}, set batchIdx(v){st.batchIdx=v},
+    get panelId(){return st.panelId}, set panelId(v){st.panelId=v},
+    get statusId(){return st.statusId}, set statusId(v){st.statusId=v},
+    get outEl(){return st.outEl}, set outEl(v){st.outEl=v},
+    get statusEl(){return st.statusEl}, set statusEl(v){st.statusEl=v},
+    get _timer(){return st._timer}, set _timer(v){st._timer=v},
+    get _lastOutput(){return st._lastOutput}, set _lastOutput(v){st._lastOutput=v},
+    nextId(){return ++st.id},
+    reset(){
+      if(st._timer){clearInterval(st._timer);st._timer=null}
+      st={el:null,id:0,docIdx:-1,batchIdx:-1,_timer:null,_lastOutput:''};
+    },
+  };
+})();
+const _streamCssLoaded=(()=>{
+  const style=document.createElement('style');
+  style.textContent=`
+    .stream-float{position:fixed;z-index:9999;width:480px;max-width:90vw;background:var(--bg2);border:1px solid var(--accent);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,0.4);font-size:13px;display:flex;flex-direction:column;resize:both;overflow:hidden;min-width:300px;min-height:200px}
+    .stream-float .shead{padding:8px 12px;background:var(--bg3);cursor:move;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);user-select:none}
+    .stream-float .shead .stitle{font-weight:600;color:var(--text);font-size:13px}
+    .stream-float .shead .sclose{background:none;border:none;color:var(--text3);cursor:pointer;font-size:18px;line-height:1;padding:0 4px}
+    .stream-float .shead .sclose:hover{color:var(--red)}
+    .stream-float .sbody{padding:10px 12px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:0}
+    .stream-float .sbody .sout{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;overflow-y:auto;flex:1;min-height:40px;line-height:1.5;color:var(--text)}
+    .stream-float .sbody .sstatus{font-size:12px;color:var(--text3);display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+  `;
+  document.head.appendChild(style);
+})();
+
+function showStreamPanel(docIdx,batchIdx,prompt){
+  // Reuse existing panel if open
+  if(StreamState.el){
+    const outEl=StreamState.outEl;
+    if(outEl){
+      outEl.innerHTML='⏳ 連線 Ollama 中<span id="thinkdots_live"></span>';
+      // Restart thinking dots
+      const dotsEl=document.getElementById('thinkdots_live');
+      if(dotsEl){
+        let dc=0;
+        const dt=setInterval(()=>{
+          if(!dotsEl.isConnected){clearInterval(dt);return}
+          dc=(dc+1)%8;dotsEl.textContent='...'.slice(0,dc%4)+(dc>3?' 🔄':'');
+        },500);
+        if(StreamState.el._dotsTimer)clearInterval(StreamState.el._dotsTimer);
+        StreamState.el._dotsTimer=dt;
+      }
+    }
+    const statusEl=StreamState.statusEl;
+    if(statusEl)statusEl.innerHTML='⏳ 等待中<button class="btn btn-sm btn-danger" onclick="stopBatchProcessing()">⏹ 停止</button>';
+    StreamState.docIdx=docIdx;StreamState.batchIdx=batchIdx;
+    updateLiveBtn(true);
+    return;
+  }
+
+  closeStreamPanel();
+  const batch=app.currentStory?.doc[docIdx]?.batches[batchIdx];
+  const id=++StreamState.id;
+  const panelId='sout_'+id;
+  const statusId='sstatus_'+id;
+  const left=Math.max(10,Math.min(window.innerWidth-490,40));
+  const top=Math.max(10,Math.min(window.innerHeight-380,80));
+
+  const panel=document.createElement('div');
+  panel.className='stream-float';
+  panel.style.left=left+'px';
+  panel.style.top=top+'px';
+  panel.style.width='480px';
+  panel.style.height='360px';
+  panel.innerHTML=`
+    <div class="shead"><span class="stitle">📡 批次 #${batchIdx+1} 即時輸出</span><button class="sclose" onclick="closeStreamPanel()">✕</button></div>
+    <div class="sbody">
+      <pre id="${panelId}" class="sout">⏳ 連線 Ollama 中<span id="thinkdots_${id}"></span></pre>
+      <div class="sstatus"><span id="${statusId}">⏳ 等待中</span><button class="btn btn-sm btn-danger" onclick="stopBatchProcessing()">⏹ 停止</button></div>
+    </div>`;
+
+  // Thinking dots animation
+  const dotsEl=panel.querySelector('#thinkdots_'+id);
+  let dotsCount=0;
+  const dotsTimer=setInterval(()=>{
+    if(!dotsEl||!dotsEl.isConnected){clearInterval(dotsTimer);return}
+    dotsCount=(dotsCount+1)%8;
+    dotsEl.textContent='...'.slice(0,dotsCount%4)+(dotsCount>3?' 🔄':'');
+  },500);
+
+  // Store dotsTimer so we can clear it when first token arrives
+  panel._dotsTimer=dotsTimer;
+
+  // Make draggable
+  let dragging=false, offX=0, offY=0;
+  const head=panel.querySelector('.shead');
+  head.addEventListener('mousedown',e=>{
+    if(e.target.tagName==='BUTTON')return;
+    dragging=true;
+    const rect=panel.getBoundingClientRect();
+    offX=e.clientX-rect.left;
+    offY=e.clientY-rect.top;
+    panel.style.cursor='grabbing';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    panel.style.left=(e.clientX-offX)+'px';
+    panel.style.top=(e.clientY-offY)+'px';
+  });
+  document.addEventListener('mouseup',()=>{if(dragging){dragging=false;panel.style.cursor=''}});
+
+  document.body.appendChild(panel);
+  // Capture direct references for reliable updates
+  const outEl=panel.querySelector('#sout_'+id);
+  const statusSp=panel.querySelector('#sstatus_'+id);
+  StreamState.el=panel;StreamState.id=id;StreamState.docIdx=docIdx;StreamState.batchIdx=batchIdx;
+  StreamState.outEl=outEl;StreamState.statusEl=statusSp;
+  StreamState.panelId=panelId;StreamState.statusId=statusId;
+
+  // Show prompt toggle via tooltip
+  const bodyEl=panel.querySelector('.sbody');
+  const promptHint=document.createElement('div');
+  promptHint.style.cssText='font-size:11px;color:var(--text3);cursor:pointer;flex-shrink:0';
+  promptHint.textContent='📄 顯示 Prompt';
+  promptHint.onclick=()=>{
+    const existing=bodyEl.querySelector('.sprompt');
+    if(existing){existing.remove();promptHint.textContent='📄 顯示 Prompt';return}
+    const pre=document.createElement('pre');
+    pre.className='sprompt';
+    pre.style.cssText='background:var(--bg);padding:8px;border-radius:4px;font-size:11px;max-height:120px;overflow:auto;white-space:pre-wrap;margin:0';
+    pre.textContent=prompt.slice(0,3000)+(prompt.length>3000?'\n...(截斷)':'');
+    bodyEl.insertBefore(pre,bodyEl.querySelector('.sout'));
+    promptHint.textContent='📄 隱藏 Prompt';
+  };
+  bodyEl.insertBefore(promptHint,bodyEl.querySelector('.sout'));
+
+  return {id,panelId,statusId};
+}
+
+function updateStreamPanel(panelId,text){
+  const el=document.getElementById(panelId);
+  if(!el)return;
+  // Clear thinking dots on first update
+  const dotsEl=el.querySelector('[id^="thinkdots_"]');
+  if(dotsEl)dotsEl.textContent='';
+  // Stop any running timer on the panel
+  const panel=el.closest('.stream-float');
+  if(panel&&panel._dotsTimer){clearInterval(panel._dotsTimer);panel._dotsTimer=null}
+  if(el.textContent&&el.textContent.replace(/\s/g,'').startsWith('⏳'))el.textContent='';
+  el.textContent=text;el.scrollTop=el.scrollHeight;
+}
+
+function finalizeStreamPanel(panelId,statusId,success){
+  const statusEl=document.getElementById(statusId);
+  if(statusEl)statusEl.textContent=success?'✅ 完成':'❌ 失敗';
+  // Stream log saved in closeStreamPanel() when panel closes
+}
+
+function closeStreamPanel(){
+  if(StreamState.el){
+    // Clean up dots timer
+    if(StreamState.el._dotsTimer){clearInterval(StreamState.el._dotsTimer)}
+    // Save stream log to batch before closing
+    if(StreamState.docIdx>=0&&StreamState.batchIdx>=0){
+      const story=app.currentStory;
+      const batch=story?.doc[StreamState.docIdx]?.batches[StreamState.batchIdx];
+      const outEl=StreamState.outEl||document.getElementById(StreamState.panelId);
+      if(batch&&outEl&&outEl.textContent&&!/^\s*⏳/.test(outEl.textContent)){
+        batch._streamLog=outEl.textContent;
+      }
+    }
+    StreamState.el.remove();
+    StreamState.reset();
+  }
+  updateLiveBtn(false);
+}
+
+// Toggle live stream panel
+function toggleLivePanel(){
+  if(StreamState.el){
+    closeStreamPanel();
+  }else{
+    // Open a fresh persistent panel
+    const left=Math.max(10,Math.min(window.innerWidth-490,40));
+    const top=Math.max(10,Math.min(window.innerHeight-380,80));
+    const panel=document.createElement('div');
+    panel.className='stream-float';
+    panel.style.left=left+'px';panel.style.top=top+'px';
+    panel.style.width='480px';panel.style.height='360px';
+    panel.innerHTML=`
+      <div class="shead"><span class="stitle">📡 即時串流</span><button class="sclose" onclick="closeStreamPanel()">✕</button></div>
+      <div class="sbody">
+        <pre class="sout" id="sout_live">⏳ 等待批次處理...</pre>
+        <div class="sstatus"><span id="sstatus_live">⏳ 待機中</span></div>
+      </div>`;
+    // Make draggable
+    let dragging=false,offX=0,offY=0;
+    const head=panel.querySelector('.shead');
+    head.addEventListener('mousedown',e=>{
+      if(e.target.tagName==='BUTTON')return;
+      dragging=true;
+      const rect=panel.getBoundingClientRect();
+      offX=e.clientX-rect.left;offY=e.clientY-rect.top;
+      panel.style.cursor='grabbing';e.preventDefault();
+    });
+    document.addEventListener('mousemove',e=>{
+      if(!dragging)return;
+      panel.style.left=(e.clientX-offX)+'px';panel.style.top=(e.clientY-offY)+'px';
+    });
+    document.addEventListener('mouseup',()=>{if(dragging){dragging=false;panel.style.cursor=''}});
+    document.body.appendChild(panel);
+    StreamState.el=panel;
+    StreamState.outEl=document.getElementById('sout_live');
+    StreamState.statusEl=document.getElementById('sstatus_live');
+    StreamState.docIdx=-1;StreamState.batchIdx=-1;
+    // Check if a batch is already processing and update panel
+    const story=app.currentStory;
+    if(story){
+      for(let di=0;di<story.doc.length;di++){
+        for(let bi=0;bi<story.doc[di].batches.length;bi++){
+          if(story.doc[di].batches[bi].status==='processing'){
+            StreamState.docIdx=di;StreamState.batchIdx=bi;
+            StreamState.outEl.textContent='⏳ 連線 Ollama 中...';
+            StreamState.statusEl.innerHTML='📡 正在處理文檔 '+(di+1)+' · 批次 '+(bi+1);
+            break;
+          }
+        }
+      }
+    }
+    updateLiveBtn(true);
+  }
+}
+function updateLiveBtn(open){
+  const btn=document.getElementById('liveStreamToggle');
+  if(btn)btn.textContent=open?'📡 串流中':'📡 即時串流';
+  if(btn)btn.style.background=open?'var(--accent)':'';
+}
+
+function showStreamLog(docIdx,batchIdx){
+  const story=app.currentStory;if(!story)return;
+  const batch=story.doc[docIdx]?.batches[batchIdx];
+  if(!batch||!batch._streamLog)return;
+  closeStreamPanel();
+  const id='sr_'+uid();
+  const panel=document.createElement('div');
+  panel.className='stream-float';
+  panel.style.left='40px';panel.style.top='80px';
+  panel.style.width='480px';panel.style.height='360px';
+  panel.innerHTML=`
+    <div class="shead"><span class="stitle">📋 批次 #${batchIdx+1} 串流紀錄</span><button class="sclose" onclick="this.closest('.stream-float').remove()">✕</button></div>
+    <div class="sbody">
+      <div style="font-size:11px;color:var(--text3);flex-shrink:0">📄 <a href="#" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';return false" style="color:var(--accent)">顯示 Prompt</a></div>
+      <pre style="display:none;background:var(--bg);padding:8px;border-radius:4px;font-size:11px;max-height:120px;overflow:auto;white-space:pre-wrap;margin:0">${escHtml((batch._prompt||'(無)').slice(0,3000))}</pre>
+      <pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;overflow-y:auto;flex:1;min-height:40px;line-height:1.5;color:var(--text)">${escHtml(batch._streamLog)}</pre>
+      <div style="font-size:12px;color:var(--text3);flex-shrink:0">✅ 完成 &nbsp;|&nbsp; 共 ${batch._streamLog.length} 字</div>
+    </div>`;
+  document.body.appendChild(panel);
+}
+
+// ============ FORESHADOW ============
+function addForeshadow(){
+  const story=app.currentStory;if(!story)return;
+  const text=prompt('輸入伏筆內容：');if(!text)return;
+  const keyword=prompt('關鍵字（選擇性，用於自動偵測）：');
+  story.foreshadow.push({id:uid(),text,keyword:keyword||'',status:'unresolved',created:formatDate(new Date()),resolvedIn:''});
+  app.save();renderAll();
+}
+
+function toggleForeshadow(id){
+  const story=app.currentStory;if(!story)return;
+  const f=story.foreshadow.find(f=>f.id===id);
+  if(!f)return;
+  f.status=f.status==='unresolved'?'resolved':'unresolved';
+  if(f.status==='resolved'&&!f.resolvedIn)f.resolvedIn='manual';
+  app.save();renderAll();
+}
+
+function deleteForeshadow(id){
+  const story=app.currentStory;if(!story)return;
+  story.foreshadow=story.foreshadow.filter(f=>f.id!==id);
+  app.save();renderAll();
+}
+
+// ============ TIMELINE DRAG ============
+let dragState=null;
+function startDrag(e,eventId){
+  if(e.button!==0)return;
+  const story=app.currentStory;if(!story)return;
+  const svg=e.target.closest('svg');
+  if(!svg)return;
+  const rect=svg.getBoundingClientRect();
+  const pt={x:e.clientX-rect.left,y:e.clientY-rect.top};
+  dragState={eventId,startX:pt.x,startY:pt.y,origX:0,origY:0,svg,rect};
+  for(const t of story.timeline.tracks){
+    const ev=t.events.find(e=>e.id===eventId);
+    if(ev){dragState.origX=ev._x||0;dragState.origY=ev._y||0;dragState.trackId=t.id;break}
+  }
+  document.addEventListener('mousemove',onDrag);
+  document.addEventListener('mouseup',endDrag);
+  e.preventDefault();
+}
+function onDrag(e){
+  if(!dragState)return;
+  const rect=dragState.svg.getBoundingClientRect();
+  dragState.rect=rect;
+  const pt={x:e.clientX-rect.left,y:e.clientY-rect.top};
+  const dx=pt.x-dragState.startX;
+  const dy=pt.y-dragState.startY;
+  const g=dragState.svg.querySelector(`g[data-eid="${dragState.eventId}"]`);
+  if(g)g.setAttribute('transform',`translate(${dx},${dy})`);
+  e.preventDefault();
+}
+function endDrag(e){
+  if(!dragState)return;
+  document.removeEventListener('mousemove',onDrag);
+  document.removeEventListener('mouseup',endDrag);
+  const story=app.currentStory;if(!story){dragState=null;return}
+  const rect=dragState.rect||dragState.svg.getBoundingClientRect();
+  const pt={x:e.clientX-rect.left,y:e.clientY-rect.top};
+
+  const tracks=story.timeline.tracks;
+  const trackH=120;const marginTop=20;
+  let newTrackIdx=Math.round((pt.y-marginTop-40)/trackH);
+  if(newTrackIdx<0)newTrackIdx=0;if(newTrackIdx>=tracks.length)newTrackIdx=tracks.length-1;
+
+  const eventId=dragState.eventId;
+  let srcTrack=null,srcIdx=-1,evData=null;
+  for(const t of tracks){
+    const idx=t.events.findIndex(e=>e.id===eventId);
+    if(idx!==-1){srcTrack=t;srcIdx=idx;evData=t.events[idx];break}
+  }
+  if(evData&&srcTrack){
+    srcTrack.events.splice(srcIdx,1);
+    const newX=Math.max(60,pt.x-dragState.startX+dragState.origX);
+    evData.trackId=tracks[newTrackIdx].id;
+    evData._x=newX;
+    tracks[newTrackIdx].events.push(evData);
+    tracks[newTrackIdx].events.sort((a,b)=>(a._x||0)-(b._x||0));
+    app.save();
+  }
+  dragState=null;
+  renderTimeline();
+}
+
+// ============ TIMELINE ============
+function renderTimeline(){
+  const story=app.currentStory;if(!story)return;
+  const el=document.getElementById('timelineContainer');
+  if(!el)return;
+  const tracks=story.timeline.tracks;
+  if(!tracks||tracks.length===0||tracks.every(t=>t.events.length===0)){
+    el.innerHTML='<div class="text-center" style="padding:40px;color:var(--text3)">尚無時間線事件。處理文檔後會自動產生。</div>';
+    return;
+  }
+
+  const W=el.clientWidth-40||800;
+  const H=Math.max(400,tracks.length*160+40);
+  const trackH=120;
+  const marginTop=20;
+
+  // Sort events by time for x-placement
+  let allEvents=[];
+  for(const t of tracks){
+    for(const e of t.events){allEvents.push({...e,trackColor:t.color})}
+  }
+  // Assign x positions (preserve dragged positions)
+  const gap=Math.max(120,Math.min(200,(W-80)/Math.max(allEvents.length,1)));
+  let autoIdx=0;
+  for(const t of tracks){
+    for(const e of t.events){
+      const ae=allEvents.find(a=>a.id===e.id);
+      if(!ae)continue;
+      ae._y=marginTop+tracks.findIndex(t=>t.id===e.trackId)*trackH+40;
+      if(e._x===undefined||e._x===0){
+        e._x=60+autoIdx*gap;autoIdx++;
+      }
+      ae._x=e._x;
+    }
+  }
+
+  let svg=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Draw tracks
+  for(let ti=0;ti<tracks.length;ti++){
+    const t=tracks[ti];
+    const y=marginTop+ti*trackH+60;
+    svg+=`<line x1="40" y1="${y}" x2="${W-40}" y2="${y}" stroke="${t.color}" stroke-width="2" opacity="0.3"/>`;
+    svg+=`<text x="35" y="${y-15}" fill="${t.color}" font-size="12" text-anchor="end">${t.name}</text>`;
+  }
+
+  // Draw lines between events on same track
+  for(const t of tracks){
+    const evs=t.events.map(e=>allEvents.find(ae=>ae.id===e.id)).filter(Boolean);
+    for(let i=1;i<evs.length;i++){
+      svg+=`<line x1="${evs[i-1]._x}" y1="${evs[i-1]._y}" x2="${evs[i]._x}" y2="${evs[i]._y}" stroke="${t.color}" stroke-width="1.5" opacity="0.4"/>`;
+    }
+  }
+
+  // Draw connecting lines for branch2 events (those that intersect main line)
+  const branch2=tracks.find(t=>t.id==='branch2');
+  if(branch2){
+    const main=tracks.find(t=>t.id==='main');
+    if(main){
+      const mainY=marginTop+tracks.indexOf(main)*trackH+60;
+      for(const e of branch2.events){
+        const ae=allEvents.find(ae=>ae.id===e.id);
+        if(ae){
+          svg+=`<line x1="${ae._x}" y1="${ae._y}" x2="${ae._x}" y2="${mainY}" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="4,3" opacity="0.5"/>`;
+          svg+=`<text x="${ae._x+5}" y="${(ae._y+mainY)/2}" fill="#ff6b6b" font-size="10" opacity="0.6">相交</text>`;
+        }
+      }
+    }
+  }
+
+  // Draw events
+  for(const ae of allEvents){
+    const idx=tracks.findIndex(t=>t.id===ae.trackId);
+    const y=ae._y;
+    const x=ae._x;
+    svg+=`<g class="event-node" data-eid="${ae.id}" style="cursor:grab">`;
+    svg+=`<circle cx="${x}" cy="${y-5}" r="8" fill="${ae.trackColor}" stroke="#fff" stroke-width="2"
+      onmousedown="startDrag(event,'${ae.id}')" onclick="if(!event.defaultPrevented)showEventDetail('${ae.id}')"/>`;
+    svg+=`<text x="${x}" y="${y-16}" text-anchor="middle" font-size="10" fill="${ae.trackColor}">${ae.code||''}</text>`;
+
+    // Time label below
+    const timeLabel=(ae.time||'').slice(0,20);
+    svg+=`<text x="${x}" y="${y+18}" text-anchor="middle" font-size="10" fill="var(--text3)">${timeLabel}</text>`;
+
+    // Event label
+    svg+=`<foreignObject x="${x-60}" y="${y+24}" width="120" height="32">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-size:10px;color:var(--text2);text-align:center;overflow:hidden;text-overflow:ellipsis;line-height:1.3;background:rgba(26,28,36,0.9);padding:2px 4px;border-radius:3px;border:1px solid var(--border)">${escHtml(ae.label||'')}</div>
+    </foreignObject>`;
+    svg+=`</g>`;
+  }
+
+  svg+=`</svg>`;
+  el.innerHTML=svg;
+}
+
+function showEventDetail(eid){
+  const story=app.currentStory;if(!story)return;
+  let entry=null,entryIdx=-1;
+  for(const t of story.timeline.tracks){
+    const e=t.events.find(ev=>ev.id===eid);
+    if(e&&e.entryIndex!==undefined){
+      const sheet=getSheet(story,'chronicle');
+      if(sheet&&sheet.rows[e.entryIndex]){entry=sheet.rows[e.entryIndex];entryIdx=e.entryIndex;break}
+    }
+  }
+  if(!entry)return alert('找不到對應的紀要條目');
+  let html='<table class="grid-table">';
+  const sheet=getSheet(story,'chronicle');
+  if(sheet){
+    for(const col of sheet.columns){
+      if(col.type==='hidden')continue;
+      html+=`<tr><td style="font-weight:600;width:80px;color:var(--accent)">${col.name}</td><td>${escHtml(entry[col.key]||'')}</td></tr>`;
+    }
+  }
+  html+='</table>';
+  showModal('條目詳情',html);
+}
+
+// ============ RENDER ============
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+function renderAll(){
+  const tabBar=document.getElementById('tabBar');
+  const main=document.getElementById('mainArea');
+  const sel=document.getElementById('storySelect');
+  const nameEl=document.getElementById('storyName');
+  if(!tabBar||!main)return;
+
+  // Update story selector
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— 選擇故事 —</option>'+app.stories.map(s=>`<option value="${s.id}"${s.id===app.currentStoryId?' selected':''}>${escHtml(s.name)}</option>`).join('');
+  const story=app.currentStory;
+  nameEl.textContent=story?story.name+' ('+story.doc.length+' 文檔)':'無故事';
+  // Migrate existing stories: upgrade brief_intro from text→textarea
+  if(story){
+    const charSheet=story.sheets.character||story.sheets.role;
+    if(charSheet){
+      const col=charSheet.columns?.find(c=>c.key==='brief_intro');
+      if(col&&col.type==='text'){col.type='textarea';col.maxLen=500;}
+    }
+  }
+
+  // Determine visible tabs based on story
+  let visibleTabs=[];
+  if(story){
+    visibleTabs=app.tabOrder.filter(t=>{
+      if(t==='errorlog')return true;
+      if(t==='character')return !!story.sheets.character;
+      if(t==='faction')return !!story.sheets.faction;
+      if(t==='item')return !!story.sheets.item;
+      if(t==='magic')return !!story.sheets.magic;
+      if(t==='technique')return !!story.sheets.technique;
+      return true;
+    });
+  }else{
+    visibleTabs=['errorlog'];
+  }
+
+  tabBar.innerHTML=visibleTabs.map(t=>`<div class="tab" data-tab="${t}" onclick="switchTab('${t}')">${app.tabLabels[t]||t}</div>`).join('');
+  if(visibleTabs.length>0&&!document.querySelector('.tab.active'))switchTab('docs');
+
+  // Render each panel content
+  const panelsHtml=visibleTabs.map(t=>`<div class="panel" id="panel_${t}"></div>`).join('');
+  main.innerHTML=panelsHtml;
+
+  // Fill panel contents
+  for(const t of visibleTabs){
+    const el=document.getElementById('panel_'+t);
+    if(!el)continue;
+    if(t==='docs')renderDocsPanel(el,story);
+    else if(t==='chronicle')renderChroniclePanel(el,story);
+    else if(t==='timeline'){
+      const chronicle=getSheet(story,'chronicle');
+      const hasEntries=chronicle&&chronicle.rows.length>0;
+      const hasEvents=story.timeline.tracks.some(t=>t.events.length>0);
+      el.innerHTML=`<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center">
+        <button class="btn btn-sm" onclick="processTimelineAI()" ${hasEntries?'':'disabled'}>🔄 AI 處理時間線</button>
+        <button class="btn btn-sm btn-outline" onclick="clearTimeline()" ${hasEvents?'':'disabled'}>🗑 清除</button>
+        <button class="btn btn-sm btn-outline" onclick="showTimelinePrompt()" ${story.timeline._prompt?'':'disabled'}>📄提示詞</button>
+        <span style="font-size:12px;color:var(--text2)">${hasEntries?`紀要表有 ${chronicle.rows.length} 條條目，點擊讓 AI 分析並分配主線/支線`:'尚無紀要，請先處理文檔'}</span>
+      </div>
+      <div id="timelineContainer" class="timeline-container"></div>`;
+      renderTimeline();
+    }
+    else if(t==='character'||t==='faction'||t==='item'||t==='technique'||t==='magic'){
+      const map={character:'character',faction:'faction',item:'item',technique:'technique',magic:'magic'};
+      renderSheetPanel(el,story,map[t]);
+    }
+    else if(t==='foreshadow')renderForeshadowPanel(el,story);
+    else if(t==='chat')renderChatPanel(el);
+    else if(t==='templates')renderTemplatePanel(el);
+    else if(t==='errorlog')renderErrorLogPanel(el);
+  }
+
+  // Mark active
+  const activeTab=document.querySelector('.tab.active');
+  if(activeTab){
+    const p=document.getElementById('panel_'+activeTab.dataset.tab);
+    if(p)p.classList.add('active');
+  }
+}
+
+function switchTab(tabId){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  const tab=document.querySelector(`.tab[data-tab="${tabId}"]`);
+  if(tab)tab.classList.add('active');
+  const panel=document.getElementById('panel_'+tabId);
+  if(panel){panel.classList.add('active');
+    if(tabId==='timeline')renderTimeline();
+  }
+}
+
+function renderDocsPanel(el,story){
+  if(!story){el.innerHTML='<div class="text-center" style="padding:40px;color:var(--text3)">請先建立或選擇一個故事</div>';return}
+  let html='<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">';
+  html+=`<button class="btn" onclick="importDocument()">＋匯入文檔</button>`;
+  html+=`<button class="btn btn-outline" onclick="processAllBatches()">▶ 處理所有待處理批次</button>`;
+  html+=`<button class="btn btn-outline" onclick="reprocessAllDone()">🔄 重新處理所有</button>`;
+  html+=`<button class="btn" id="liveStreamToggle" onclick="toggleLivePanel()" title="開啟即時串流視窗，觀看 AI 處理過程">📡 即時串流</button>`;
+  const isRunning=story.doc.some(d=>d.batches.some(b=>b.status==='processing'));
+  if(isRunning||BatchState.length>0)
+    html+=`<button class="btn btn-danger" onclick="stopBatchProcessing()">⏹ 停止處理</button>`;
+  if(BatchState.length>0){
+    let etaText='';
+    const doneDurations=[];
+    for(const d of story.doc){
+      for(const b of d.batches){
+        if(b.duration>0)doneDurations.push(b.duration);
+      }
+    }
+    if(doneDurations.length>0){
+      const avg=doneDurations.reduce((s,v)=>s+v,0)/doneDurations.length;
+      const etaMs=avg*BatchState.length;
+      if(etaMs<86400000)etaText=' · 預計完成 '+formatTime(etaMs);
+    }
+    html+=`<span style="font-size:13px;color:var(--accent)">佇列 ${BatchState.length} 批待處理${etaText}</span>`;
+  }
+  html+=`<span style="font-size:13px;color:var(--text2)">Token 上限：${app.settings.tokenLimit}</span>`;
+  html+=`</div>`;
+
+  if(story.doc.length===0){
+    html+='<div style="padding:30px;text-align:center;color:var(--text3)">尚無文檔。點「匯入文檔」開始。</div>';
+    el.innerHTML=html;return;
+  }
+
+  for(let di=0;di<story.doc.length;di++){
+    const doc=story.doc[di];
+    html+=`<div class="doc-item"><span class="name">${escHtml(doc.name)}</span><span class="size">${doc.text.length}字 / ${doc.batches.length}批次</span><button class="btn btn-sm btn-outline" onclick="openFindReplace(${di})" title="搜尋取代此文檔" style="margin-left:8px">🔍</button></div>`;
+    html+=`<div class="batch-list" style="margin:4px 0 12px 16px">`;
+    for(let bi=0;bi<doc.batches.length;bi++){
+      const b=doc.batches[bi];
+      const statusClass=b.status==='done'?'status-done':b.status==='processing'?'status-processing':'status-pending';
+      html+=`<div class="batch-card">`;
+      html+=`<div class="header"><span class="num">批次 #${bi+1}</span><span class="tokens">${b.tokens} tokens</span></div>`;
+      html+=`<div class="preview">${escHtml(b.text.slice(0,120))}</div>`;
+      html+=`<div style="margin-top:4px;display:flex;gap:6px;align-items:center">`;
+      html+=`<span class="status ${statusClass}">${b.status==='done'?'✅已處理':b.status==='processing'?'⏳處理中':'⏸待處理'}${b.duration?' ('+formatTime(b.duration)+')':''}</span>`;
+      if(b.status!=='processing')html+=`<button class="btn btn-sm" onclick="processBatch(${di},${bi})">${b.status==='pending'?'處理此批':'🔄重新處理'}</button>`;
+      if(b.result)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchResult(${di},${bi})">查看結果</button>`;
+      if(b._prompt)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchPrompt(${di},${bi})">📄提示詞</button>`;
+      if(b._streamLog&&b._streamLog.length>10)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchFullOutput(${di},${bi})">查看 AI 輸出結果</button>`;
+      if(b.status==='done'&&b.result)html+=`<button class="btn btn-sm btn-danger" onclick="clearBatchResult(${di},${bi})">清除結果</button>`;
+      html+=`</div></div>`;
+    }
+    html+=`</div>`;
+  }
+  el.innerHTML=html;
+}
+
+function showBatchResult(di,bi){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[di];if(!doc)return;
+  const batch=doc.batches[bi];if(!batch||!batch.result)return;
+  const r=batch.result;
+  let html='<table class="grid-table">';
+  const sheet=getSheet(story,'chronicle');
+  if(sheet){
+    for(const col of sheet.columns){
+      if(col.type==='hidden')continue;
+      html+=`<tr><td style="font-weight:600;width:80px">${col.name}</td><td>${escHtml(r[col.key]||'')}</td></tr>`;
+    }
+  }
+  html+='</table>';
+  showModal('批次處理結果',html);
+}
+
+function showBatchFullOutput(di,bi){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[di];if(!doc)return;
+  const batch=doc.batches[bi];if(!batch||!batch._streamLog)return;
+  let text=batch._streamLog;
+  // Try to format if it's JSON
+  try{
+    const cleaned=extractJsonFromResponse(text);
+    const parsed=JSON.parse(cleaned);
+    text=JSON.stringify(parsed,null,2);
+  }catch(e){}
+  showModal('AI 輸出結果',
+    `<div style="margin-bottom:8px;font-size:12px;color:var(--text2)">原始 AI 回覆：</div>
+    <pre style="background:var(--bg);padding:12px;border-radius:6px;font-size:12px;max-height:500px;overflow:auto;white-space:pre-wrap;line-height:1.4;color:var(--text)">${escHtml(text)}</pre>`
+  );
+}
+function showBatchPrompt(di,bi){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[di];if(!doc)return;
+  const batch=doc.batches[bi];if(!batch||!batch._prompt)return;
+  const text=batch._prompt;
+  showModal('批次提示詞',
+    `<textarea class="code" style="height:400px;width:100%;background:var(--bg);color:var(--text);padding:8px;border-radius:4px;font-size:12px;white-space:pre-wrap" readonly>${escHtml(text)}</textarea>
+    <div class="actions"><button class="btn" onclick="navigator.clipboard.writeText(${JSON.stringify(text)}).then(closeModal)">複製</button><button class="btn btn-outline" onclick="closeModal()">關閉</button></div>`
+  );
+}
+function showTimelinePrompt(){
+  const story=app.currentStory;if(!story)return;
+  const prompt=story.timeline._prompt;
+  if(!prompt)return;
+  showModal('時間線分析提示詞',
+    `<textarea class="code" style="height:400px;width:100%;background:var(--bg);color:var(--text);padding:8px;border-radius:4px;font-size:12px;white-space:pre-wrap" readonly>${escHtml(prompt)}</textarea>
+    <div class="actions"><button class="btn" onclick="navigator.clipboard.writeText(${JSON.stringify(prompt)}).then(closeModal)">複製</button><button class="btn btn-outline" onclick="closeModal()">關閉</button></div>`
+  );
+}
+
+// ── 搜尋取代 ──
+let _frDocIdx=-1,_frQuery='',_frMatches=[],_frCur=-1;
+
+function openFindReplace(docIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  _frDocIdx=docIdx;_frMatches=[];_frCur=-1;_frQuery='';
+  const text=doc.text;
+  showModal('搜尋與取代',
+    `<div style="margin-bottom:8px">
+      <textarea id="frText" oninput="frAutoSave()" style="width:100%;height:250px;background:var(--bg2);color:var(--text);border:1px solid var(--border);padding:8px;border-radius:4px;font-size:13px;font-family:inherit;white-space:pre-wrap;resize:vertical">${escHtml(text)}</textarea>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <input id="frFind" placeholder="搜尋..." style="flex:2;min-width:100px;background:var(--bg2);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px" autofocus>
+      <input id="frReplace" placeholder="取代為..." style="flex:1;min-width:80px;background:var(--bg2);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px">
+      <span id="frCount" style="font-size:12px;color:var(--text2);min-width:50px">0</span>
+      <button class="btn btn-sm" onclick="frPrev()" id="frPrevBtn" disabled>▲</button>
+      <button class="btn btn-sm" onclick="frNext()" id="frNextBtn" disabled>▼</button>
+      <button class="btn btn-sm" onclick="frReplace()" id="frReplaceBtn" disabled>取代</button>
+      <button class="btn btn-sm btn-outline" onclick="frReplaceAll()" id="frReplaceAllBtn" disabled>全部取代</button>
+      <button class="btn btn-sm btn-primary" onclick="frSaveClose()">儲存</button>
+    </div>`
+  );
+  document.getElementById('frFind').addEventListener('input',frSearch);
+  document.getElementById('frFind').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();frNext()}});
+  document.getElementById('frReplace').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();frReplace()}});
+}
+
+function frSearch(){
+  const ta=document.getElementById('frText');
+  const inp=document.getElementById('frFind');
+  if(!ta||!inp)return;
+  _frQuery=inp.value;
+  if(!_frQuery){_frMatches=[];_frCur=-1;frUpdateUI();return}
+  const text=ta.value;
+  _frMatches=[];
+  let idx=0;
+  while(true){
+    const pos=text.indexOf(_frQuery,idx);
+    if(pos===-1)break;
+    _frMatches.push(pos);
+    idx=pos+_frQuery.length;
+  }
+  _frCur=_frMatches.length>0?0:-1;
+  frHighlight();
+  frUpdateUI();
+}
+
+function frHighlight(){
+  const ta=document.getElementById('frText');
+  if(!ta||!_frQuery){frUpdateUI();return}
+  const text=ta.value;
+  if(!_frQuery||_frMatches.length===0){frUpdateUI();return}
+  // Build highlighted version: split around matches
+  let html='';
+  let last=0;
+  for(let i=0;i<_frMatches.length;i++){
+    const pos=_frMatches[i];
+    html+=escHtml(text.slice(last,pos));
+    html+='<mark class="fr-match'+(i===_frCur?' fr-cur':'')+'">'+escHtml(text.slice(pos,pos+_frQuery.length))+'</mark>';
+    last=pos+_frQuery.length;
+  }
+  html+=escHtml(text.slice(last));
+  // Use a mirror div for highlighting
+  let mirror=document.getElementById('frMirror');
+  if(!mirror){
+    mirror=document.createElement('div');
+    mirror.id='frMirror';
+    mirror.style.cssText='position:absolute;top:0;left:0;right:0;bottom:0;padding:8px;background:var(--bg2);color:var(--text);font-size:13px;font-family:inherit;white-space:pre-wrap;overflow:auto;pointer-events:none;border:1px solid var(--border);border-radius:4px;line-height:1.4;z-index:1';
+    ta.parentElement.style.position='relative';
+    ta.parentElement.appendChild(mirror);
+  }
+  // Sync scroll
+  mirror.scrollTop=ta.scrollTop;
+  mirror.scrollLeft=ta.scrollLeft;
+  mirror.innerHTML=html;
+  // Make textarea transparent to show highlights
+  ta.style.color='transparent';
+  ta.style.caretColor='var(--text)';
+  frUpdateUI();
+}
+
+function frUpdateUI(){
+  const cnt=document.getElementById('frCount');
+  const prev=document.getElementById('frPrevBtn');
+  const next=document.getElementById('frNextBtn');
+  const rep=document.getElementById('frReplaceBtn');
+  const repAll=document.getElementById('frReplaceAllBtn');
+  const has=_frMatches.length>0;
+  cnt.textContent=_frMatches.length+(_frCur>=0?' / '+(1+_frCur):'');
+  prev.disabled=!has;next.disabled=!has;
+  rep.disabled=!_frQuery||_frCur<0;
+  repAll.disabled=!_frQuery;
+  // Scroll current match into view
+  if(_frCur>=0&&_frMatches[_frCur]!==undefined){
+    const ta=document.getElementById('frText');
+    if(ta){
+      const pos=_frMatches[_frCur];
+      const lineNum=ta.value.slice(0,pos).split('\n').length;
+      const lineH=ta.scrollHeight/ta.value.split('\n').length;
+      ta.scrollTop=Math.max(0,(lineNum-3)*lineH);
+    }
+  }
+}
+
+function frPrev(){
+  if(_frMatches.length===0)return;
+  _frCur=(_frCur-1+_frMatches.length)%_frMatches.length;
+  frHighlight();
+}
+
+function frNext(){
+  if(_frMatches.length===0)return;
+  _frCur=(_frCur+1)%_frMatches.length;
+  frHighlight();
+}
+
+function frReplace(){
+  if(_frCur<0||_frCur>=_frMatches.length)return;
+  const ta=document.getElementById('frText');
+  const rep=document.getElementById('frReplace');
+  if(!ta||!rep)return;
+  const rv=rep.value;
+  const pos=_frMatches[_frCur];
+  const before=ta.value.slice(0,pos);
+  const after=ta.value.slice(pos+_frQuery.length);
+  ta.value=before+rv+after;
+  // Recalculate matches
+  const lenDiff=rv.length-_frQuery.length;
+  _frMatches=_frMatches.map((m,i)=>i>_frCur?m+lenDiff:m);
+  _frMatches.splice(_frCur,1);
+  if(_frCur>=_frMatches.length&&_frMatches.length>0)_frCur=_frMatches.length-1;
+  frHighlight();
+  frUpdateUI();
+}
+
+function frReplaceAll(){
+  const ta=document.getElementById('frText');
+  const rep=document.getElementById('frReplace');
+  if(!ta||!rep||!_frQuery)return;
+  const rv=rep.value;
+  ta.value=ta.value.split(_frQuery).join(rv);
+  _frMatches=[];_frCur=-1;
+  frSearch(); // re-search
+}
+
+function frAutoSave(){
+  // Remove highlight mirror when editing
+  const mirror=document.getElementById('frMirror');
+  if(mirror){mirror.remove()}
+  const ta=document.getElementById('frText');
+  if(ta)ta.style.color='var(--text)';
+  // Re-run search if query exists
+  if(_frQuery)frSearch();
+}
+
+function frSaveClose(){
+  const ta=document.getElementById('frText');
+  if(!ta)return;
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[_frDocIdx];if(!doc)return;
+  doc.text=ta.value;
+  // Re-split into batches
+  splitDocument(_frDocIdx);
+  // Reset batch results
+  for(const b of doc.batches){b.status='pending';delete b.result;delete b._streamLog;delete b._prompt;delete b._startTime;delete b._streamStartTime;delete b.duration;delete b._duration}
+  app.save();renderAll();
+  closeModal();
+}
+
+function renderChroniclePanel(el,story){
+  if(!story){el.innerHTML='';return}
+  const sheet=getSheet(story,'chronicle');
+  if(!sheet){el.innerHTML='<div style="color:var(--text3)">此模板無紀要表</div>';return}
+  renderSheet(el,sheet);
+}
+
+function renderSheetPanel(el,story,sid){
+  if(!story){el.innerHTML='';return}
+  const sheet=getSheet(story,sid);
+  if(!sheet){el.innerHTML='<div style="color:var(--text3)">此模板無此表</div>';return}
+  renderSheet(el,sheet);
+}
+
+function renderSheet(el,sheet){
+  const cols=sheet.columns.filter(c=>c.type!=='hidden');
+  let html='<div style="overflow:auto;flex:1">';
+  html+=`<div style="margin-bottom:8px;font-size:14px;font-weight:600;color:var(--accent)">${escHtml(sheet.name)}</div>`;
+  html+=`<button class="btn btn-sm mb-8" onclick="addSheetRow('${sheet.uid}')">＋新增行</button>`;
+  html+='<table class="grid-table"><thead><tr>';
+  for(const col of cols)html+=`<th>${escHtml(col.name)}</th>`;
+  html+='<th style="width:60px">操作</th></tr></thead><tbody>';
+
+  for(let ri=0;ri<sheet.rows.length;ri++){
+    const r=sheet.rows[ri];
+    html+='<tr>';
+    for(const col of cols){
+      const val=r[col.key]||'';
+      html+=`<td><span class="editable" contenteditable="true" onblur="updateSheetCell('${sheet.uid}',${ri},'${col.key}',this.innerText)">${escHtml(val)}</span></td>`;
+    }
+    html+=`<td><button class="btn btn-sm btn-danger" onclick="deleteSheetRow('${sheet.uid}',${ri})">刪</button></td>`;
+    html+='</tr>';
+  }
+  html+='</tbody></table></div>';
+  el.innerHTML=html;
+}
+
+function addSheetRow(uid){
+  const story=app.currentStory;if(!story)return;
+  const sheet=getSheetByUid(story,uid);
+  if(!sheet)return;
+  const row={row_id:sheet.rows.length+1};
+  for(const col of sheet.columns){
+    if(col.default!==undefined)row[col.key]=col.default;
+    else row[col.key]='';
+  }
+  sheet.rows.push(row);
+  app.save();renderAll();
+}
+
+function updateSheetCell(uid,ri,key,val){
+  const story=app.currentStory;if(!story)return;
+  const sheet=getSheetByUid(story,uid);
+  if(!sheet||!sheet.rows[ri])return;
+  sheet.rows[ri][key]=val;
+  app.save();
+}
+
+function deleteSheetRow(uid,ri){
+  if(!confirm('確認刪除此行？'))return;
+  const story=app.currentStory;if(!story)return;
+  const sheet=getSheetByUid(story,uid);
+  if(!sheet||!sheet.rows[ri])return;
+  sheet.rows.splice(ri,1);
+  app.save();renderAll();
+}
+
+// ============ AI TIMELINE PROCESSING ============
+function clearTimeline(){
+  const story=app.currentStory;if(!story)return;
+  if(!confirm('清除所有時間線事件？'))return;
+  for(const t of story.timeline.tracks)t.events=[];
+  app.save();renderAll();
+}
+async function processTimelineAI(){
+  const story=app.currentStory;if(!story)return;
+  const chronicle=getSheet(story,'chronicle');
+  if(!chronicle||chronicle.rows.length===0)return alert('尚無紀要條目');
+  if(app.settings.aiProvider!=='ollama')return alert('此功能需使用 Ollama 模式（設定中切換）');
+
+  // Build prompt with all chronicle entries
+  let entries='';
+  for(const r of chronicle.rows){
+    entries+=`- [${r.code_index}] ${r.time_span||'?'} | ${r.location||'?'} | ${r.summary||r.chronicle?.slice(0,80)||'?'}\n`;
+  }
+
+  const prompt=`你是時間線分析專家。以下是故事紀要表中的所有事件條目：
+
+${entries}
+
+## 現有軌道
+${story.timeline.tracks.map(t=>`- ${t.id}: ${t.name}`).join('\n')}
+
+## 你的任務
+1. 分析所有事件，將它們分配到適合的軌道上。主線放核心劇情，支線放次要/平行事件
+2. 同一軌道內的事件按發生時間順序排列
+3. 每個事件輸出：chronicle_code（紀要表的編碼索引）、track（軌道 id）、position（在軌道中的排序位置，從 0 開始）
+
+## 輸出格式（純 JSON）
+{
+  "events":[
+    {"chronicle_code":"1","track":"main","position":0},
+    {"chronicle_code":"2","track":"main","position":1}
+  ]
+}`;
+
+  // Ensure streaming panel is open
+  if(!StreamState.el)toggleLivePanel();
+  const outEl=StreamState.outEl;
+  const statusEl=StreamState.statusEl;
+  if(outEl)outEl.textContent='⏳ AI 時間線處理中...';
+  if(statusEl)statusEl.innerHTML='📡 AI 正在分析事件並分配軌道...';
+  story.timeline._prompt=prompt;
+  const _tlStart=Date.now();
+
+  try{
+    let fullResponse='';
+    // Start elapsed timer
+    if(!StreamState._timer){
+      StreamState._timer=setInterval(()=>{
+        const se=StreamState.statusEl;
+        if(!se)return;
+        const elapsed=Date.now()-_tlStart;
+        se.innerHTML='📡 AI 正在分析事件並分配軌道... ⏱ '+formatTime(elapsed);
+      },1000);
+    }
+    await callOllamaStream(prompt,'時間線處理',(fullText,delta,done)=>{
+      fullResponse=fullText;
+      if(outEl)outEl.textContent=fullText;
+      if(done){
+        // Stop timer
+        if(StreamState._timer){clearInterval(StreamState._timer);StreamState._timer=null}
+        const dur=Date.now()-_tlStart;
+        Metrics.add(prompt.length,fullText.length,dur,'timeline');
+        try{
+          const cleaned=extractJsonFromResponse(fullResponse);
+          const parsed=JSON.parse(cleaned);
+          if(!parsed.events||!Array.isArray(parsed.events))throw new Error('AI 回傳格式錯誤');
+          // Clear existing timeline events and apply AI results
+          for(const t of story.timeline.tracks)t.events=[];
+          const gap=140;
+          let ti=0;
+          for(const ev of parsed.events){
+            const chronicleRow=chronicle.rows.find(r=>r.code_index===String(ev.chronicle_code)||r.code_index===ev.chronicle_code);
+            if(!chronicleRow)continue;
+            const track=story.timeline.tracks.find(t=>t.id===ev.track);
+            if(!track)continue;
+            track.events.push({
+              id:uid(),
+              entryIndex:chronicle.rows.indexOf(chronicleRow),
+              time:chronicleRow.time_span||'',
+              label:chronicleRow.summary?.slice(0,40)||chronicleRow.code_index,
+              code:chronicleRow.code_index,
+              trackId:ev.track,
+              x:0,y:0,
+              _x:60+(ev.position!=null?ev.position:ti)*gap
+            });
+            ti++;
+          }
+          app.save();renderAll();
+          if(statusEl)statusEl.innerHTML='✅ 時間線處理完成（'+formatTime(dur)+'）';
+          if(outEl)outEl.textContent=JSON.stringify(parsed.events,null,2);
+        }catch(e2){
+          logAiError('時間線處理',prompt,fullResponse,e2.message);
+          if(statusEl)statusEl.innerHTML='❌ 時間線處理失敗：'+e2.message;
+        }
+      }
+    });
+  }catch(e){
+    logAiError('時間線處理',prompt,null,e.message);
+    if(statusEl)statusEl.innerHTML='❌ 時間線處理失敗：'+e.message;
+  }
+}
+
+function renderForeshadowPanel(el,story){
+  if(!story){el.innerHTML='';return}
+  let html=`<div style="margin-bottom:8px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="addForeshadow()">＋新增伏筆</button><span style="font-size:13px;color:var(--text2)">共 ${story.foreshadow.length} 條（${story.foreshadow.filter(f=>f.status==='resolved').length} 已解決）</span></div>`;
+  html+='<table class="grid-table"><thead><tr><th>伏筆內容</th><th>關鍵字</th><th>狀態</th><th>建立時間</th><th>解決位置</th><th>操作</th></tr></thead><tbody>';
+  for(const f of story.foreshadow){
+    html+=`<tr>
+      <td>${escHtml(f.text)}</td>
+      <td>${escHtml(f.keyword||'—')}</td>
+      <td class="${f.status==='resolved'?'text-green':'text-red'}">${f.status==='resolved'?'✅ 已解決':'⏳ 未解決'}</td>
+      <td>${escHtml(f.created||'')}</td>
+      <td>${escHtml(f.resolvedIn||'')}</td>
+      <td>
+        <button class="btn btn-sm btn-outline" onclick="toggleForeshadow('${f.id}')">${f.status==='resolved'?'復原':'標記解決'}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteForeshadow('${f.id}')">刪</button>
+      </td>
+    </tr>`;
+  }
+  html+='</tbody></table>';
+  el.innerHTML=html;
+}
+
+function renderChatPanel(el){
+  el.innerHTML=`<div class="chat-area">
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-msg ai"><div class="label">AI 助手</div><div>您好！我可以讀取所有表格資料並協助您撰寫或修改內容。請輸入您的需求。</div></div>
+    </div>
+    <div class="chat-input">
+      <textarea id="chatInput" placeholder="輸入訊息... (Enter 發送, Shift+Enter 換行)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+      <button class="btn" onclick="sendChat()">發送</button>
+    </div>
+  </div>`;
+}
+
+function renderTemplatePanel(el){
+  let html=`<div style="margin-bottom:12px;font-size:14px;font-weight:600">模板管理</div>`;
+  html+=`<div class="template-grid">`;
+  for(const t of app.templates){
+    const sheetCount=Object.keys(t.sheets).length;
+    html+=`<div class="template-card" onclick="openTemplateEditor('${t.id}')">
+      <div class="name">${escHtml(t.name)}</div>
+      <div class="desc">${t.builtin?'內建':'自訂'} • ${sheetCount} 個表格</div>
+    </div>`;
+  }
+  html+=`<div class="template-card" onclick="copyTemplate()" style="border-style:dashed;display:flex;align-items:center;justify-content:center;min-height:80px;color:var(--accent)">
+    <div>＋ 從現有模板複製</div>
+  </div>`;
+  html+=`</div>`;
+  html+=`<div style="margin-top:16px;padding:12px;background:var(--bg3);border-radius:6px">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">匯入/匯出模板 JSON</div>
+    <div class="flex gap-8">
+      <button class="btn btn-sm btn-outline" onclick="exportTemplate()">匯出模板</button>
+      <button class="btn btn-sm btn-outline" onclick="importTemplate()">匯入模板</button>
+    </div>
+  </div>`;
+  el.innerHTML=html;
+}
+
+function copyTemplate(){
+  const name=prompt('新模板名稱：');
+  if(!name)return;
+  const srcId=prompt('複製自哪個模板 ID？(jk_default / gen_default 或自訂 ID)','jk_default');
+  const src=app.templates.find(t=>t.id===srcId);
+  if(!src)return alert('找不到來源模板');
+  const tmpl={id:uid(),name,builtin:false,sheets:clone(src.sheets)};
+  app.templates.push(tmpl);
+  app.save();renderAll();
+}
+
+function buildEditorHtml(editing,origTmpl){
+  let html=`<div style="font-size:13px">`;
+  html+=`<div style="margin-bottom:12px"><label style="display:block;margin-bottom:4px;font-weight:600">模板名稱</label>
+    <input id="teName" value="${escHtml(editing.name)}" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-size:13px"></div>`;
+  html+=`<div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+    <span style="font-weight:600">表格列表</span>
+    <button class="btn btn-sm" onclick="teAddSheet()">＋新增表格</button></div>`;
+  html+=`<div id="teSheets" style="display:flex;flex-direction:column;gap:8px">`;
+  for(const sk of Object.keys(editing.sheets)){
+    const sh=editing.sheets[sk];
+    html+=`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:10px">`;
+    html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">`;
+    html+=`<span style="font-size:13px;font-weight:600;color:var(--accent)">${escHtml(sh.name)}</span>`;
+    html+=`<div><button class="btn btn-sm btn-outline" onclick="teRenameSheet('${sk}')" style="margin-right:4px">改名</button><button class="btn btn-sm btn-danger" onclick="teRemoveSheet('${sk}')">刪表</button></div></div>`;
+    html+=`<div style="font-size:12px;color:var(--text2);margin-bottom:4px">欄位：</div>`;
+    html+=`<div id="teCols_${sk}" style="display:flex;flex-direction:column;gap:3px">`;
+    for(let ci=0;ci<sh.columns.length;ci++){
+      const col=sh.columns[ci];
+      html+=`<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">`;
+      html+=`<input value="${escHtml(col.key)}" placeholder="key" onchange="teColKey('${sk}',${ci},this.value)" style="width:90px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 4px;border-radius:3px;font-size:12px;font-family:monospace">`;
+      html+=`<input value="${escHtml(col.name)}" placeholder="名稱" onchange="teColName('${sk}',${ci},this.value)" style="width:90px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 4px;border-radius:3px;font-size:12px">`;
+      html+=`<select onchange="teColType('${sk}',${ci},this.value)" style="width:80px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 4px;border-radius:3px;font-size:12px">
+        ${['hidden','text','textarea','number','select'].map(t=>`<option value="${t}"${col.type===t?' selected':''}>${t}</option>`).join('')}
+      </select>`;
+      if(col.type==='select'){
+        html+=`<input value="${escHtml((col.options||[]).join(','))}" placeholder="選項(逗號分隔)" onchange="teColOpts('${sk}',${ci},this.value)" style="flex:1;min-width:100px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:2px 4px;border-radius:3px;font-size:12px">`;
+      }
+      if(col.maxLen){
+        html+=`<span style="font-size:11px;color:var(--text3)">最長${col.maxLen}字</span>`;
+      }
+      if(col.type!=='hidden'){
+        html+=`<button class="btn btn-sm btn-danger" onclick="teRemoveCol('${sk}',${ci})" style="padding:1px 5px;font-size:11px">✕</button>`;
+      }
+      html+=`</div>`;
+    }
+    html+=`<button class="btn btn-sm btn-outline" onclick="teAddCol('${sk}')" style="margin-top:3px;align-self:flex-start">＋新增欄位</button>`;
+    html+=`<div style="margin-top:6px;font-size:12px;color:var(--text2)">AI 提示詞：</div>`;
+    html+=`<textarea onchange="teSetPrompt('${sk}',this.value)" style="width:100%;height:50px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:4px;font-size:12px;resize:vertical;margin-top:2px">${escHtml(sh.prompt||'')}</textarea>`;
+    html+=`</div></div>`;
+  }
+  html+=`</div>`;
+  html+=`<hr style="border-color:var(--border);margin:12px 0">`;
+  html+=`<div style="display:flex;gap:8px;flex-wrap:wrap">`;
+  html+=`<button class="btn" onclick="teSave()">💾 儲存模板</button>`;
+  html+=`<button class="btn btn-outline" onclick="teApplyToStory('${origTmpl.id}')">📋 套用到當前故事</button>`;
+  html+=`<button class="btn btn-outline" onclick="closeModal()">取消</button>`;
+  if(!origTmpl.builtin)html+=`<button class="btn btn-danger" onclick="teDeleteTemplate('${origTmpl.id}')">刪除模板</button>`;
+  html+=`</div></div>`;
+  return html;
+}
+
+// ---- Template editor state (module-scoped, no window leak) ----
+const TmplEditState = (() => {
+  let _state = null;
+  return {
+    get state(){ return _state; },
+    set state(v){ _state = v; },
+    render(){ if(_state) _state.renderEditor(); },
+    clear(){ _state = null; },
+  };
+})();
+
+function openTemplateEditor(tid){
+  const tmpl=app.templates.find(t=>t.id===tid);
+  if(!tmpl)return;
+  let editing=clone(tmpl);
+
+  const contentId='teContainer_'+uid();
+  showModal('編輯模板：'+escHtml(tmpl.name),'<div id="'+contentId+'"></div>');
+
+  TmplEditState.state={editing,tmpl,renderEditor:()=>{
+    const e=TmplEditState.state;if(!e)return;
+    const h=buildEditorHtml(e.editing,tmpl);
+    const cont=document.getElementById(contentId);
+    if(cont)cont.innerHTML=h;
+  }};
+
+  const tryRender=()=>{
+    if(document.getElementById(contentId)){
+      TmplEditState.render();
+    }else{setTimeout(tryRender,30)}
+  };
+  tryRender();
+}
+
+// ---- Template editor callbacks ----
+window.teRenameSheet=function(uid2){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[uid2];if(!sh)return;
+  const name=prompt('新表格名稱：',sh.name);
+  if(name)sh.name=name;
+  e.renderEditor();
+};
+window.teAddSheet=function(){
+  const e=TmplEditState.state;if(!e)return;
+  const uid2='sheet_'+Date.now().toString(36);
+  const name=prompt('表格名稱：','新表格');
+  if(!name)return;
+  e.editing.sheets[uid2]={uid:uid2,name,columns:[
+    {key:'row_id',name:'row_id',type:'hidden'},
+    {key:'field1',name:'欄位1',type:'text'}
+  ]};
+  e.renderEditor();
+};
+window.teRemoveSheet=function(uid2){
+  if(!confirm('確認刪除此表格？'))return;
+  const e=TmplEditState.state;if(!e)return;
+  delete e.editing.sheets[uid2];
+  e.renderEditor();
+};
+window.teAddCol=function(sheetKey){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sheetKey];if(!sh)return;
+  const name='col_'+(sh.columns.length+1);
+  sh.columns.push({key:name,name:'新欄位',type:'text'});
+  e.renderEditor();
+};
+window.teSetPrompt=function(sheetKey,val){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sheetKey];if(!sh)return;
+  if(!sh.prompt)sh.prompt='';
+  sh.prompt=val;
+};
+window.teRemoveCol=function(sheetKey,ci){
+  if(!confirm('確認刪除此欄位？'))return;
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sheetKey];if(!sh)return;
+  sh.columns.splice(ci,1);
+  e.renderEditor();
+};
+window.teColKey=function(sk,ci,val){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sk];if(!sh||!sh.columns[ci])return;
+  sh.columns[ci].key=val;
+};
+window.teColName=function(sk,ci,val){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sk];if(!sh||!sh.columns[ci])return;
+  sh.columns[ci].name=val;
+};
+window.teColType=function(sk,ci,val){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sk];if(!sh||!sh.columns[ci])return;
+  sh.columns[ci].type=val;
+  if(val==='hidden'){sh.columns[ci].name='row_id'}
+  e.renderEditor();
+};
+window.teColOpts=function(sk,ci,val){
+  const e=TmplEditState.state;if(!e)return;
+  const sh=e.editing.sheets[sk];if(!sh||!sh.columns[ci])return;
+  sh.columns[ci].options=val.split(',').map(s=>s.trim()).filter(s=>s);
+};
+window.teSave=function(){
+  const e=TmplEditState.state;if(!e)return;
+  const nameInput=document.getElementById('teName');
+  if(nameInput)e.editing.name=nameInput.value||e.editing.name;
+  // Validate
+  if(!e.editing.name)return alert('請輸入模板名稱');
+  if(Object.keys(e.editing.sheets).length===0)return alert('至少需要一個表格');
+  // Copy editing to original
+  Object.assign(e.tmpl,{name:e.editing.name,sheets:e.editing.sheets});
+  e.tmpl.builtin=false;
+  app.save();renderAll();
+  alert('模板已儲存');
+  closeModal();
+};
+window.teApplyToStory=function(tid){
+  const story=app.currentStory;
+  if(!story)return alert('請先選擇或建立一個故事');
+  if(!confirm('套用模板不會影響已有資料，但新條目會使用新模板的欄位。繼續？'))return;
+  story.templateId=tid;
+  app.save();renderAll();
+  alert('已套用');
+  closeModal();
+};
+window.teDeleteTemplate=function(tid){
+  if(!confirm('確認永久刪除此模板？'))return;
+  app.templates=app.templates.filter(t=>t.id!==tid);
+  app.save();renderAll();
+  closeModal();
+};
+
+// Keep old selectTemplate for backward compat
+function selectTemplate(tid){
+  const story=app.currentStory;
+  if(!story)return;
+  if(!confirm('切換模板不會影響已有資料，但新條目會使用新模板的欄位。繼續？'))return;
+  story.templateId=tid;
+  app.save();renderAll();
+}
+
+function exportTemplate(){
+  const story=app.currentStory;
+  if(!story)return alert('請先選擇故事');
+  const tmpl=app.templates.find(t=>t.id===story.templateId);
+  if(!tmpl)return alert('找不到模板');
+  const json=JSON.stringify(tmpl,null,2);
+  const blob=new Blob([json],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download=tmpl.name+'_template.json';a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importTemplate(){
+  const input=document.createElement('input');input.type='file';input.accept='.json';
+  input.onchange=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    const text=await file.text();
+    try{
+      const tmpl=JSON.parse(text);
+      if(!tmpl.id||!tmpl.name||!tmpl.sheets)throw new Error('格式錯誤');
+      tmpl.builtin=false;
+      if(app.templates.find(t=>t.id===tmpl.id))tmpl.id=uid();
+      app.templates.push(tmpl);
+      app.save();renderAll();
+      alert('模板匯入成功');
+    }catch(err){alert('匯入失敗：'+err.message)}
+  };
+  input.click();
+}
+
+// ============ MODAL ============
+let modalEl=null;
+function showModal(title,content){
+  closeModal();
+  const d=document.createElement('div');d.className='modal-overlay';d.id='modalOverlay';
+  d.onclick=e=>{if(e.target===d)closeModal()};
+  d.innerHTML=`<div class="modal"><h3>${title}</h3><div>${content}</div></div>`;
+  document.body.appendChild(d);modalEl=d;
+}
+function closeModal(){const d=document.getElementById('modalOverlay');if(d){d.remove();modalEl=null}}
+
+// ============ EXPORT / IMPORT STORY ============
+function exportStory(){
+  const story=app.currentStory;
+  if(!story)return alert('請先選擇故事');
+  const data=clone(story);
+  data._template=app.templates.find(t=>t.id===story.templateId)||null;
+  data._version=1;
+  const json=JSON.stringify(data,null,2);
+  const blob=new Blob([json],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download=story.name+'_story.json';a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importStory(){
+  const input=document.createElement('input');input.type='file';input.accept='.json';
+  input.onchange=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    const text=await file.text();
+    try{
+      const data=JSON.parse(text);
+      if(!data.id||!data.name||!data.sheets)throw new Error('格式錯誤');
+      data.id=uid();
+      if(data._template){
+        data._template.builtin=false;data._template.id=uid();
+        app.templates.push(data._template);
+        data.templateId=data._template.id;
+      }
+      delete data._template;delete data._version;
+      app.stories.push(data);
+      app.currentStoryId=data.id;
+      app.save();renderAll();
+      alert('故事匯入成功');
+    }catch(err){alert('匯入失敗：'+err.message)}
+  };
+  input.click();
+}
+
+// ============ ONE-CLICK OLLAMA DEPLOY ============
+async function deployOllama(){
+  const status=document.getElementById('deployStatus');
+  const btn=document.getElementById('deployBtn');
+  if(!status||!btn)return;
+  status.innerHTML='';btn.disabled=true;
+
+  const log=(msg,type)=>{
+    const c=type==='ok'?'var(--green)':type==='err'?'var(--red)':'var(--text2)';
+    status.innerHTML+=`<div style="color:${c};font-size:13px;padding:2px 0">${msg}</div>`;
+    status.scrollTop=status.scrollHeight;
+  };
+
+  // Step 0: Check if running from file://
+  if(location.protocol==='file:'){
+    log('⚠ 由 file:// 開啟 — 瀏覽器會擋掉 localhost 連線', 'err');
+    log('解法 A：在同目錄開啟終端機，執行以下指令啟動伺服器：', '');
+    log('  python -m http.server 8000', '');
+    log('  然後開 http://localhost:8000/story_timeline_tool.html', '');
+    log('解法 B：改用 Firefox 開啟此檔案（Firefox 允許 file:// fetch）', '');
+    log('解法 C：設完後可手動在「設定」填入以下值：', '');
+    log('  Ollama URL: http://localhost:11434/api/generate', '');
+    log('  Ollama 模型: gemma4:12b', '');
+    log('  並把 AI 模式切為「Ollama 本地」', '');
+    btn.disabled=false;return;
+  }
+
+  // Step 1: Check Ollama connection
+  log('正在檢查 Ollama 連線...');
+  try{
+    const resp=await fetch('http://localhost:11434/api/tags',{signal:AbortSignal.timeout(5000)});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const data=await resp.json();
+    log('✓ Ollama 已連線。模型列表：'+(data.models||[]).map(m=>m.name).join(', ')||'(無模型)', 'ok');
+  }catch(e){
+    log('✗ 無法連線到 Ollama（http://localhost:11434）', 'err');
+    log('請確認：', 'err');
+    log('  1. 已安裝 Ollama：https://ollama.com/download', '');
+    log('  2. Ollama 服務正在執行', '');
+    log('  Windows 確認方式：在工作管理員查看 ollama.exe 是否存在', '');
+    log('  或在終端機執行：ollama serve', '');
+    btn.disabled=false;
+    return;
+  }
+
+  // Step 2: Check if gemma4:12b already exists
+  log('正在確認 gemma4:12b 模型狀態...');
+  let alreadyHave=false;
+  try{
+    const resp=await fetch('http://localhost:11434/api/tags',{signal:AbortSignal.timeout(5000)});
+    const data=await resp.json();
+    alreadyHave=(data.models||[]).some(m=>m.name.startsWith('gemma4'));
+    if(alreadyHave)log('✓ gemma4:12b 模型已存在', 'ok');
+  }catch(e){}
+
+  // Step 3: Pull model if needed
+  if(!alreadyHave){
+    log('正在下載 gemma4:12b（約 7.6GB，初次下載可能需要 5~30 分鐘）...');
+    log('下載進度：');
+    try{
+      const resp=await fetch('http://localhost:11434/api/pull',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:'gemma4:12b',stream:true})
+      });
+      const reader=resp.body.getReader();
+      const decoder=new TextDecoder();
+      while(true){
+        const {done,value}=await reader.read();
+        if(done)break;
+        const lines=decoder.decode(value).split('\n').filter(l=>l.trim());
+        for(const line of lines){
+          try{
+            const j=JSON.parse(line);
+            if(j.status)log('  '+j.status+(j.total?' ('+Math.round(j.completed/j.total*100)+'%)':''));
+          }catch(e){}
+        }
+      }
+      log('✓ gemma4:12b 下載完成！', 'ok');
+    }catch(e){
+      log('✗ 下載失敗：'+e.message, 'err');
+      log('可手動在終端機執行：ollama pull gemma4:12b', '');
+      btn.disabled=false;
+      return;
+    }
+  }
+
+  // Step 4: Apply settings
+  app.settings.ollamaUrl='http://localhost:11434/api/generate';
+  app.settings.ollamaModel='gemma4:12b';
+  app.settings.aiProvider='ollama';
+  app.save();
+  log('✓ 設定已套用：AI 模式→Ollama，模型→gemma4:12b', 'ok');
+  log('✅ 一鍵部署完成！現在可以關閉此視窗開始使用。', 'ok');
+  btn.disabled=false;
+  btn.textContent='✅ 已設定完成';
+  const urlField=document.getElementById('setOllamaUrl');
+  const modelField=document.getElementById('setOllamaModel');
+  const modeField=document.getElementById('setAiMode');
+  if(urlField)urlField.value='http://localhost:11434/api/generate';
+  if(modelField)modelField.value='gemma4:12b';
+  if(modeField)modeField.value='ollama';
+}
+
+// ============ SETTINGS ============
+function showSettings(){
+  const s=app.settings;
+  showModal('設定',`
+    <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:13px">
+      <span>Token 上限</span><input id="setToken" type="number" value="${s.tokenLimit}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+      <span>AI 模式</span><select id="setAiMode" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px">
+        <option value="prompt"${s.aiProvider==='prompt'?' selected':''}>Prompt 模式（手動複製）</option>
+        <option value="ollama"${s.aiProvider==='ollama'?' selected':''}>Ollama 本地</option>
+      </select>
+      <span class="d-none" id="apiKeyLabel">API Key</span><input id="setApiKey" type="password" value="${s.apiKey||''}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" class="d-none">
+      <span class="d-none" id="apiUrlLabel">API URL</span><input id="setApiUrl" value="${s.apiEndpoint||''}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" class="d-none">
+      <span id="ollamaUrlLabel">Ollama URL</span><input id="setOllamaUrl" value="${s.ollamaUrl}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+      <span>Ollama 模型</span><input id="setOllamaModel" value="${s.ollamaModel}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+    </div>
+    <hr style="border-color:var(--border);margin:12px 0">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">一鍵部署 Ollama + gemma:12b</div>
+    <button id="deployBtn" class="btn" onclick="deployOllama()" style="width:100%;padding:8px;font-size:14px">⚡ 一鍵設定 Ollama 與 gemma:12b</button>
+    <div id="deployStatus" style="margin-top:8px;max-height:200px;overflow-y:auto;background:var(--bg);padding:8px;border-radius:4px;font-family:monospace;font-size:12px"></div>
+    <div class="actions" style="margin-top:12px"><button class="btn" onclick="saveSettings()">儲存</button><button class="btn btn-outline" onclick="closeModal()">取消</button></div>
+  `);
+}
+
+function saveSettings(){
+  const s=app.settings;
+  s.tokenLimit=parseInt(document.getElementById('setToken')?.value)||2000;
+  s.aiProvider=document.getElementById('setAiMode')?.value||'prompt';
+  s.apiKey=document.getElementById('setApiKey')?.value||'';
+  s.apiEndpoint=document.getElementById('setApiUrl')?.value||'';
+  s.ollamaUrl=document.getElementById('setOllamaUrl')?.value||s.ollamaUrl;
+  s.ollamaModel=document.getElementById('setOllamaModel')?.value||s.ollamaModel;
+  app.save();closeModal();
+}
+
+// ============ LOCAL SERVER HELP ============
+window.copyCmd=function(){
+  navigator.clipboard.writeText('python -m http.server 8000').then(()=>{
+    const h=document.getElementById('protocolHint');
+    if(h)h.innerHTML='<span style="color:var(--green)">✓ 指令已複製！請在終端機貼上執行</span>';
+  });
+};
+window.startLocalServer=function(){
+  showModal('啟動本機伺服器',`
+    <div style="font-size:13px">
+      <p style="margin-bottom:8px">在終端機執行以下指令：</p>
+      <pre style="background:var(--bg3);padding:12px;border-radius:6px;font-size:14px;user-select:all">python -m http.server 8000</pre>
+      <p style="margin:8px 0">然後開啟：<a href="http://localhost:8000/story_timeline_tool.html" target="_blank" style="color:var(--accent)">http://localhost:8000/story_timeline_tool.html</a></p>
+      <p style="color:var(--text3)">或直接雙擊目錄中的 <code>start_server.bat</code></p>
+    </div>
+    <div class="actions" style="margin-top:12px"><button class="btn" onclick="openNewTab()">🔄 切換到 localhost</button><button class="btn btn-outline" onclick="closeModal()">關閉</button></div>
+  `);
+};
+window.openNewTab=function(){
+  window.open('http://localhost:8000/story_timeline_tool.html','_blank');
+  closeModal();
+};
+
+// ============ INIT ============
+document.addEventListener('DOMContentLoaded',()=>{
+  // Detect file:// protocol and show hint
+  const hint=document.getElementById('protocolHint');
+  if(hint&&location.protocol==='file:'){
+    hint.style.display='inline';
+    hint.innerHTML='<span style="color:var(--orange)">⚠ file:// 會擋 localhost。雙擊 </span><code style="background:var(--bg3);padding:1px 4px;border-radius:3px">start_server.bat</code><span style="color:var(--orange)"> 自動開瀏覽器（或 </span><a href="#" onclick="startLocalServer();return false" style="color:var(--accent)">看說明</a><span style="color:var(--orange)">）</span>';
+  }
+  renderAll();
+});
+
+// Auto-save on changes (debounced)
+let _autoSaveTimer=null;
+document.addEventListener('DOMContentLoaded',()=>{
+  document.addEventListener('click',()=>{
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer=setTimeout(()=>app.save(),500);
+  });
+});
+</script>
+</body>
+</html>
