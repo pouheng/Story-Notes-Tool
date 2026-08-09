@@ -1746,22 +1746,30 @@ function clearErrorLog(){
   app.save();renderAll();
 }
 
-// Idle timeout: aborts only when NO data arrives for the given ms, instead of
-// a hard total-time limit. This lets a slow-but-working stream (DeepSeek can
-// take minutes) run to completion without being killed mid-generation.
-function makeIdleTimeout(ms){
+// Idle timeout for streaming.
+// Two budgets:
+//  - firstTokenMs: how long we wait for the FIRST token (generous — DeepSeek can
+//    think for many minutes before emitting anything; don't kill it there).
+//  - idleMs: once streaming starts, abort only if NO data arrives for this long.
+// The timer only resets on actual chunks, so a slow-but-working stream survives.
+function makeIdleTimeout(firstTokenMs,idleMs){
   const ctrl=new AbortController();
   let timer=null;
-  const arm=()=>{
+  let started=false;
+  const arm=(ms)=>{
     clearTimeout(timer);
     timer=setTimeout(()=>{
       if(!ctrl.signal.aborted)ctrl.abort(new DOMException('idle-timeout','TimeoutError'));
     },ms);
   };
-  arm();
+  arm(firstTokenMs);
   return {
     signal:ctrl.signal,
-    reset(){arm();},
+    reset(){
+      // First chunk received → switch to the (shorter) inter-chunk idle budget.
+      if(!started){started=true;arm(idleMs);}
+      else arm(idleMs);
+    },
     clear(){clearTimeout(timer);timer=null;}
   };
 }
@@ -1796,7 +1804,7 @@ async function callOllamaStream(prompt,context,onToken){
   const model=app.settings.ollamaModel;
   let fullText='';
   let rawBuf='';
-  const idle=makeIdleTimeout(app.settings.requestTimeout||180000);
+  const idle=makeIdleTimeout(900000,app.settings.requestTimeout||180000);
   try{
     const resp=await fetch(url,{
       method:'POST',
@@ -1921,7 +1929,7 @@ async function callOpenAIStream(prompt,context,onToken){
   const model=app.settings.deepseekModel||'deepseek-chat';
   const key=app.settings.apiKey;
   let fullText='';
-  const idle=makeIdleTimeout(app.settings.requestTimeout||180000);
+  const idle=makeIdleTimeout(900000,app.settings.requestTimeout||180000);
   try{
     const resp=await fetch(url,{
       method:'POST',
