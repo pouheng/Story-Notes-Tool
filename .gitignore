@@ -2,3 +2,7 @@
 *.txt
 # Temp
 temp_check.js
+# Python runtime artifacts
+__pycache__/
+proxy.log
+start_proxy.bat
