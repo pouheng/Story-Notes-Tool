@@ -415,7 +415,7 @@ const app = (()=>{
   // --- Private state ---
   let _stories=[];
   let _currentStoryId=null;
-  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', deepseekModel:'deepseek-chat', openaiModels:[], thinkingEnabled:true, thinkingLevel:'medium', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b', requestTimeout:180000, maxRetries:2, retryDelay:5000};
+  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', deepseekModel:'deepseek-chat', openaiModels:[], thinkingEnabled:true, thinkingLevel:'medium', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b', requestTimeout:300000, maxRetries:2, retryDelay:5000};
   let _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE];
   const _tabOrder=['docs','chronicle','timeline','character','faction','item','magic','technique','foreshadow','chat','templates','errorlog'];
   const _tabLabels={'docs':'📂文檔','chronicle':'📋紀要表','timeline':'📈時間線','character':'👤角色','faction':'🏛勢力','item':'📦物品','magic':'✨魔法','technique':'⚡術式','foreshadow':'🔮伏筆','chat':'💬AI聊天','templates':'📐模板','errorlog':'⚠錯誤日誌'};
@@ -923,6 +923,20 @@ function _runBatchWithQueue(docIdx,batchIdx){
     }).catch(e=>{
       const outEl=StreamState.outEl;
       const statusEl=StreamState.statusEl;
+      const isTimeout=(e&&(e.name==='TimeoutError'||e.name==='AbortError'))||/abort|timeout/i.test(String(e&&e.message||''));
+      // Timeout: do NOT fall back to non-stream (that restarts generation from zero
+      // and hits the same timeout again). Retry the batch directly instead.
+      if(isTimeout){
+        batchLog(batch,'串流逾時','模型長時間未回應：'+e.message);
+        if(outEl)outEl.textContent='⏱ 串流逾時（長時間未收到回應），準備重試...';
+        if(statusEl)statusEl.innerHTML='⏱ 串流逾時，準備重試...';
+        if(!batchGiveUp(docIdx,batchIdx,'串流逾時：'+e.message)){
+          batch.status='pending';renderAll();
+          if(statusEl)statusEl.innerHTML='❌ 串流逾時，請修正後再處理';
+          setTimeout(()=>doneOne(),2000);
+        }
+        return;
+      }
       if(outEl)outEl.textContent='❌ 串流失敗 ('+e.message+')，改用非串流...';
       if(statusEl)statusEl.innerHTML='❌ 串流失敗，降級至非串流...';
       batchLog(batch,'串流失敗','降級為非串流：'+e.message);
@@ -1050,6 +1064,20 @@ function _runBatchWithQueue(docIdx,batchIdx){
     }).catch(e=>{
       const outEl=StreamState.outEl;
       const statusEl=StreamState.statusEl;
+      const isTimeout=(e&&(e.name==='TimeoutError'||e.name==='AbortError'))||/abort|timeout/i.test(String(e&&e.message||''));
+      // Timeout: do NOT fall back to non-stream (that restarts generation from zero
+      // and hits the same timeout again). Retry the batch directly instead.
+      if(isTimeout){
+        batchLog(batch,'串流逾時','模型長時間未回應：'+e.message);
+        if(outEl)outEl.textContent='⏱ 串流逾時（長時間未收到回應），準備重試...';
+        if(statusEl)statusEl.innerHTML='⏱ 串流逾時，準備重試...';
+        if(!batchGiveUp(docIdx,batchIdx,'串流逾時：'+e.message)){
+          batch.status='pending';renderAll();
+          if(statusEl)statusEl.innerHTML='❌ 串流逾時，請修正後再處理';
+          setTimeout(()=>doneOne(),2000);
+        }
+        return;
+      }
       if(outEl)outEl.textContent='❌ 串流失敗 ('+e.message+')，改用非串流...';
       if(statusEl)statusEl.innerHTML='❌ 串流失敗，降級至非串流...';
       batchLog(batch,'串流失敗','降級為非串流：'+e.message);
@@ -1659,6 +1687,26 @@ function clearErrorLog(){
   app.save();renderAll();
 }
 
+// Idle timeout: aborts only when NO data arrives for the given ms, instead of
+// a hard total-time limit. This lets a slow-but-working stream (DeepSeek can
+// take minutes) run to completion without being killed mid-generation.
+function makeIdleTimeout(ms){
+  const ctrl=new AbortController();
+  let timer=null;
+  const arm=()=>{
+    clearTimeout(timer);
+    timer=setTimeout(()=>{
+      if(!ctrl.signal.aborted)ctrl.abort(new DOMException('idle-timeout','TimeoutError'));
+    },ms);
+  };
+  arm();
+  return {
+    signal:ctrl.signal,
+    reset(){arm();},
+    clear(){clearTimeout(timer);timer=null;}
+  };
+}
+
 async function callOllama(prompt,context){
   const url=app.settings.ollamaUrl;
   const model=app.settings.ollamaModel;
@@ -1689,19 +1737,20 @@ async function callOllamaStream(prompt,context,onToken){
   const model=app.settings.ollamaModel;
   let fullText='';
   let rawBuf='';
-  const timeout=app.settings.requestTimeout||180000;
+  const idle=makeIdleTimeout(app.settings.requestTimeout||180000);
   try{
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model, prompt, stream:true}),
-      signal:AbortSignal.timeout(timeout)
+      signal:idle.signal
     });
     if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
 
     // Fallback: if ReadableStream not available, read as text
     if(!resp.body||!resp.body.getReader){
       const text=await resp.text();
+      idle.clear();
       rawBuf=text;
       // Try to extract response via simple regex or parse as non-streaming JSON
       try{
@@ -1720,6 +1769,7 @@ async function callOllamaStream(prompt,context,onToken){
     while(true){
       const {done,value}=await reader.read();
       if(done)break;
+      idle.reset();
       buf+=decoder.decode(value,{stream:true});
       rawBuf=buf;
       const lines=buf.split('\n');
@@ -1771,8 +1821,10 @@ async function callOllamaStream(prompt,context,onToken){
         throw new Error('串流結束但無內容');
       }
     }
+    idle.clear();
     return fullText;
   }catch(e){
+    idle.clear();
     logAiError(context||'Ollama 串流',prompt,null,e.message);
     throw e;
   }
@@ -1810,17 +1862,18 @@ async function callOpenAIStream(prompt,context,onToken){
   const model=app.settings.deepseekModel||'deepseek-chat';
   const key=app.settings.apiKey;
   let fullText='';
-  const timeout=app.settings.requestTimeout||180000;
+  const idle=makeIdleTimeout(app.settings.requestTimeout||180000);
   try{
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
       body:JSON.stringify({model,messages:[{role:'user',content:prompt}],stream:true}),
-      signal:AbortSignal.timeout(timeout)
+      signal:idle.signal
     });
     if(!resp.ok)throw new Error('OpenAI HTTP '+resp.status);
     if(!resp.body||!resp.body.getReader){
       const data=await resp.json();
+      idle.clear();
       const text=data.choices?.[0]?.message?.content||'';
       if(text)onToken(text,'',true);
       else throw new Error('無法解析回覆');
@@ -1833,6 +1886,7 @@ async function callOpenAIStream(prompt,context,onToken){
     while(true){
       const {done,value}=await reader.read();
       if(done)break;
+      idle.reset();
       buf+=decoder.decode(value,{stream:true});
       const lines=buf.split('\n');
       buf=lines.pop()||'';
@@ -1856,8 +1910,10 @@ async function callOpenAIStream(prompt,context,onToken){
       logAiError(context||'OpenAI 串流',prompt,null,'串流結束但無內容');
       throw new Error('串流結束但無內容');
     }
+    idle.clear();
     return fullText;
   }catch(e){
+    idle.clear();
     logAiError(context||'OpenAI 串流',prompt,null,e.message);
     throw e;
   }
@@ -3522,7 +3578,7 @@ function showSettings(){
   showModal('設定',`
     <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:13px">
       <span>Token 上限</span><input id="setToken" type="number" value="${s.tokenLimit}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
-      <span>請求逾時(秒)</span><input id="setTimeout" type="number" value="${Math.round((s.requestTimeout||180000)/1000)}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="單次 API 請求逾時上限，單位秒">
+      <span>閒置逾時(秒)</span><input id="setTimeout" type="number" value="${Math.round((s.requestTimeout||300000)/1000)}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="串流若超過此秒數未收到任何回應才中止；只要有 token 持續送達就不會逾時">
       <span>失敗重試次數</span><input id="setRetries" type="number" value="${s.maxRetries!=null?s.maxRetries:2}" min="0" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="API 呼叫失敗時自動重試的次數">
       <span>重試間隔(秒)</span><input id="setRetryDelay" type="number" value="${Math.round((s.retryDelay||5000)/1000)}" min="1" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="每次重試之間的等待秒數">
       <span>AI 模式</span><select id="setAiMode" onchange="toggleAiModeFields()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px">
@@ -3607,7 +3663,7 @@ window.toggleAiModeFields=function(){
 function saveSettings(){
   const s=app.settings;
   s.tokenLimit=parseInt(document.getElementById('setToken')?.value)||2000;
-  s.requestTimeout=(parseInt(document.getElementById('setTimeout')?.value)||180)*1000;
+  s.requestTimeout=(parseInt(document.getElementById('setTimeout')?.value)||300)*1000;
   s.maxRetries=parseInt(document.getElementById('setRetries')?.value)||0;
   s.retryDelay=(parseInt(document.getElementById('setRetryDelay')?.value)||5)*1000;
   s.aiProvider=document.getElementById('setAiMode')?.value||'prompt';
