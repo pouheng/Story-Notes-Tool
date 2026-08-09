@@ -105,6 +105,7 @@ textarea.code{font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-
     <button onclick="deleteCurrentStory()" style="background:var(--red);color:#fff" title="刪除當前故事">🗑刪除</button>
     <button onclick="importStory()">📂匯入</button>
     <button onclick="exportStory()">💾匯出</button>
+    <button onclick="exportStoryHTML()" title="匯出全部表格為單一 HTML 檔案（保留排序）">📄匯出 HTML</button>
   </div>
   <span style="flex:1"></span>
   <span id="protocolHint" style="font-size:12px;display:none"></span>
@@ -1005,15 +1006,29 @@ function generateBatchPrompt(story,batch){
   }
 
   // Foreshadowing section — include existing so LLM doesn't duplicate
+  const FORESHADOW_CRITERIA=`\n**伏筆判定標準（嚴格）：** 只有符合以下條件的事件才算是伏筆：
+1. 對後續劇情造成**足夠深遠的影響**——會影響主線走向、重大轉折、角色命運、或揭開長期謎團。
+2. 明顯是作者刻意埋下的線索（有具體細節、異常徵兆、未解釋的伏筆性台詞/物品/現象）。
+3. 影響範圍**跨越多個場景或章節**，不是單場事件就結束的小細節。
+
+**排除（不要提取）：**
+- 當下就解釋清楚、立即解決的小事件
+- 日常對話、瑣碎描述、臨時出現但無後續影響的人事物
+- 角色的普通心情、短暫情緒、非關鍵的背景設定
+- 過於模糊、無法判斷是否有後續影響的內容
+
+寧可少提、不要濫提。若無符合標準的內容則輸出空陣列[]。`;
   let foreshadowSection=`\n## 伏筆\n`;
   if(story.foreshadow&&story.foreshadow.length>0){
     foreshadowSection+=`**已有伏筆（請勿重複提取）：**\n`;
     for(const f of story.foreshadow){
       foreshadowSection+=`- [${f.status}] ${f.text}（關鍵字：${f.keyword||'無'}）\n`;
     }
+    foreshadowSection+=FORESHADOW_CRITERIA;
     foreshadowSection+=`\n請從本次內容中提取**新的**潛在伏筆（不可與以上重複），每筆包含 text（內容）和 keyword（關鍵字）。若無則輸出空陣列。`;
   }else{
-    foreshadowSection+=`請從本次內容中提取潛在伏筆（懸念、謎題、未解釋事件），每筆包含 text（內容）和 keyword（關鍵字）。若無則輸出空陣列。`;
+    foreshadowSection+=FORESHADOW_CRITERIA;
+    foreshadowSection+=`\n請從本次內容中提取潛在伏筆，每筆包含 text（內容）和 keyword（關鍵字）。若無則輸出空陣列。`;
   }
   sheetSections+=foreshadowSection;
 
@@ -1235,6 +1250,16 @@ function clearBatchResult(docIdx,batchIdx){
   app.save();renderAll();
 }
 
+function markBatchDone(docIdx,batchIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const batch=doc.batches[batchIdx];if(!batch)return;
+  if(!confirm('將此批次手動標記為「已處理」（不經過 AI）？'))return;
+  batch.status='done';
+  batch.duration=batch.duration||0;
+  app.save();renderAll();
+}
+
 function deleteDocument(docIdx){
   const story=app.currentStory;if(!story)return;
   const doc=story.doc[docIdx];if(!doc)return;
@@ -1276,7 +1301,10 @@ function processAllBatches(){
   BatchState.reset();
   for(let di=0;di<story.doc.length;di++){
     for(let bi=0;bi<story.doc[di].batches.length;bi++){
-      if(story.doc[di].batches[bi].status==='pending'){
+      const b=story.doc[di].batches[bi];
+      // Treat a batch with a result as done even if status is stale (defensive fix)
+      if(b.result&&b.status!=='processing')b.status='done';
+      if(b.status==='pending'){
         BatchState.enqueue(di,bi);
         count++;
       }
@@ -2314,17 +2342,20 @@ function renderDocsPanel(el,story){
     html+=`<div class="batch-list" style="margin:4px 0 12px 16px">`;
     for(let bi=0;bi<doc.batches.length;bi++){
       const b=doc.batches[bi];
-      const statusClass=b.status==='done'?'status-done':b.status==='processing'?'status-processing':'status-pending';
+      // Defensive: a batch with a result is done even if status is stale
+      const effectiveStatus=(b.result&&b.status!=='processing')?'done':b.status;
+      const statusClass=effectiveStatus==='done'?'status-done':effectiveStatus==='processing'?'status-processing':'status-pending';
       html+=`<div class="batch-card">`;
       html+=`<div class="header"><span class="num">批次 #${bi+1}</span><span class="tokens">${b.tokens} tokens</span></div>`;
       html+=`<div class="preview">${escHtml((b.text||doc.text.slice(b.start||0,b.end||0)||'').slice(0,120))}</div>`;
       html+=`<div style="margin-top:4px;display:flex;gap:6px;align-items:center">`;
-      html+=`<span class="status ${statusClass}">${b.status==='done'?'✅已處理':b.status==='processing'?('⏳處理中 '+(b._startTime?'('+formatTime(Date.now()-b._startTime)+')':'')):'⏸待處理'}${b.duration?' ('+formatTime(b.duration)+')':''}</span>`;
-      if(b.status!=='processing')html+=`<button class="btn btn-sm" onclick="processBatch(${di},${bi})">${b.status==='pending'?'處理此批':'🔄重新處理'}</button>`;
+      html+=`<span class="status ${statusClass}">${effectiveStatus==='done'?'✅已處理':effectiveStatus==='processing'?('⏳處理中 '+(b._startTime?'('+formatTime(Date.now()-b._startTime)+')':'')):'⏸待處理'}${b.duration?' ('+formatTime(b.duration)+')':''}</span>`;
+      if(effectiveStatus!=='processing')html+=`<button class="btn btn-sm" onclick="processBatch(${di},${bi})">${effectiveStatus==='pending'?'處理此批':'🔄重新處理'}</button>`;
+      if(effectiveStatus==='pending')html+=`<button class="btn btn-sm btn-outline" onclick="markBatchDone(${di},${bi})" title="不經過 AI，直接將此批標記為已處理">✔標記已處理</button>`;
       if(b.result)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchResult(${di},${bi})">查看結果</button>`;
       if(b._prompt)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchPrompt(${di},${bi})">📄提示詞</button>`;
       if(b._streamLog&&b._streamLog.length>10)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchFullOutput(${di},${bi})">查看 AI 輸出結果</button>`;
-      if(b.status==='done'&&b.result)html+=`<button class="btn btn-sm btn-danger" onclick="clearBatchResult(${di},${bi})">清除結果</button>`;
+      if(effectiveStatus==='done'&&b.result)html+=`<button class="btn btn-sm btn-danger" onclick="clearBatchResult(${di},${bi})">清除結果</button>`;
       html+=`</div></div>`;
     }
     html+=`</div>`;
@@ -2578,23 +2609,71 @@ function renderSheetPanel(el,story,sid){
   renderSheet(el,sheet);
 }
 
+function defaultSortKey(sheet){
+  if(sheet.uid==='sheet_character'||sheet.uid==='sheet_role')return 'name';
+  if(sheet.uid==='sheet_magic'||sheet.uid==='sheet_technique')return 'user';
+  return null;
+}
+
+function hasSheetColumn(sheet,key){
+  return sheet&&sheet.columns&&sheet.columns.some(c=>c.key===key);
+}
+
+function getSheetSort(sheet){
+  if(!sheet._sort||!sheet._sort.key||!hasSheetColumn(sheet,sheet._sort.key)){
+    const def=defaultSortKey(sheet);
+    if(def&&hasSheetColumn(sheet,def))sheet._sort={key:def,dir:'asc'};
+    else return null;
+  }
+  return sheet._sort||null;
+}
+
+function toggleSheetSort(uid,key){
+  const story=app.currentStory;if(!story)return;
+  const sheet=getSheetByUid(story,uid);
+  if(!sheet)return;
+  const s=sheet._sort||{};
+  if(s.key===key){
+    s.dir=s.dir==='asc'?'desc':'asc';
+  }else{
+    s.key=key;s.dir='asc';
+  }
+  sheet._sort=s;
+  app.save();renderAll();
+}
+
 function renderSheet(el,sheet){
   const cols=sheet.columns.filter(c=>c.type!=='hidden');
+  const sort=getSheetSort(sheet);
+  // Build an array of rows that remembers their original index for editing
+  const indexed=sheet.rows.map((r,i)=>({r,i}));
+  if(sort&&sort.key){
+    indexed.sort((a,b)=>{
+      const av=(a.r[sort.key]==null?'':String(a.r[sort.key]));
+      const bv=(b.r[sort.key]==null?'':String(b.r[sort.key]));
+      let cmp=av.localeCompare(bv,'zh-Hant-CN');
+      if(sort.dir==='desc')cmp=-cmp;
+      return cmp;
+    });
+  }
   let html='<div style="overflow:auto;flex:1">';
   html+=`<div style="margin-bottom:8px;font-size:14px;font-weight:600;color:var(--accent)">${escHtml(sheet.name)}</div>`;
   html+=`<button class="btn btn-sm mb-8" onclick="addSheetRow('${sheet.uid}')">＋新增行</button>`;
+  html+=`<span style="font-size:12px;color:var(--text3);margin-left:8px">${sort&&sort.key?('排序：'+sort.key+' '+((sort.dir==='asc')?'▲':'▼')):''}</span>`;
   html+='<table class="grid-table"><thead><tr>';
-  for(const col of cols)html+=`<th>${escHtml(col.name)}</th>`;
+  for(const col of cols){
+    const arrow=(sort&&sort.key===col.key)?(sort.dir==='asc'?' ▲':' ▼'):'';
+    html+=`<th onclick="toggleSheetSort('${sheet.uid}','${col.key}')" style="cursor:pointer;user-select:none" title="點擊排序">${escHtml(col.name)}${arrow}</th>`;
+  }
   html+='<th style="width:60px">操作</th></tr></thead><tbody>';
 
-  for(let ri=0;ri<sheet.rows.length;ri++){
-    const r=sheet.rows[ri];
+  for(const {r,i} of indexed){
     html+='<tr>';
     for(const col of cols){
-      const val=r[col.key]||'';
-      html+=`<td><span class="editable" contenteditable="true" onblur="updateSheetCell('${sheet.uid}',${ri},'${col.key}',this.innerText)">${escHtml(val)}</span></td>`;
+      const val=r[col.key]==null?'':r[col.key];
+      html+=`<td><span class="editable" contenteditable="true" onblur="updateSheetCell('${sheet.uid}',${i},'${col.key}',this.innerText)">${escHtml(val)}</span></td>`;
     }
-    html+=`<td><button class="btn btn-sm btn-danger" onclick="deleteSheetRow('${sheet.uid}',${ri})">刪</button></td>`;
+    html+=`<td><button class="btn btn-sm btn-danger" onclick="deleteSheetRow('${sheet.uid}',${i})">刪</button></td>`;
     html+='</tr>';
   }
   html+='</tbody></table></div>';
@@ -3049,6 +3128,77 @@ function exportStory(){
   const blob=new Blob([json],{type:'application/json'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);a.download=story.name+'_story.json';a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportStoryHTML(){
+  const story=app.currentStory;
+  if(!story)return alert('請先選擇故事');
+  const sheets=Object.values(story.sheets);
+
+  // Build a sorted table for each sheet, using the same rules as the UI
+  function buildSheetTable(sheet){
+    const cols=sheet.columns.filter(c=>c.type!=='hidden');
+    const sort=getSheetSort(sheet);
+    const indexed=sheet.rows.map((r,i)=>({r,i}));
+    if(sort&&sort.key){
+      indexed.sort((a,b)=>{
+        const av=(a.r[sort.key]==null?'':String(a.r[sort.key]));
+        const bv=(b.r[sort.key]==null?'':String(b.r[sort.key]));
+        let cmp=av.localeCompare(bv,'zh-Hant-CN');
+        if(sort.dir==='desc')cmp=-cmp;
+        return cmp;
+      });
+    }
+    let t=`<h3>${escHtml(sheet.name)}</h3>`;
+    if(!cols.length){t+='<p>（無欄位）</p>';return t}
+    t+='<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%">';
+    t+='<thead><tr>';
+    for(const col of cols){
+      const arrow=(sort&&sort.key===col.key)?(sort.dir==='asc'?' ▲':' ▼'):'';
+      t+=`<th style="background:#2d3040;color:#e0e0e0">${escHtml(col.name)}${arrow}</th>`;
+    }
+    t+='</tr></thead><tbody>';
+    for(const {r} of indexed){
+      t+='<tr>';
+      for(const col of cols){
+        t+=`<td>${escHtml(r[col.key]==null?'':r[col.key])}</td>`;
+      }
+      t+='</tr>';
+    }
+    t+='</tbody></table>';
+    return t;
+  }
+
+  let body='';
+  for(const sheet of sheets){
+    if(!sheet||!sheet.columns)continue;
+    body+=buildSheetTable(sheet)+'\n';
+  }
+
+  const html=`<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>${escHtml(story.name)} - 故事紀要</title>
+<style>
+body{font-family:'Segoe UI','Noto Sans TC','Microsoft JhengHei',sans-serif;background:#0f1117;color:#e0e0e0;padding:24px;max-width:1200px;margin:0 auto}
+h1{border-bottom:2px solid #6c8cff;padding-bottom:8px}
+h2{color:#6c8cff;margin-top:32px}
+h3{color:#6c8cff;margin-top:24px}
+th{font-weight:600;text-align:left}
+td{vertical-align:top}
+@media print{body{background:#fff;color:#000}th{background:#eee!important;color:#000!important}}
+</style>
+</head>
+<body>
+<h1>${escHtml(story.name)}</h1>
+${body}
+</body>
+</html>`;
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download=story.name+'_tables.html';a.click();
   URL.revokeObjectURL(a.href);
 }
 
