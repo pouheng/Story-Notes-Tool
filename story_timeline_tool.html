@@ -415,7 +415,7 @@ const app = (()=>{
   // --- Private state ---
   let _stories=[];
   let _currentStoryId=null;
-  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', deepseekModel:'deepseek-chat', openaiModels:[], thinkingEnabled:true, thinkingLevel:'medium', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b'};
+  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', deepseekModel:'deepseek-chat', openaiModels:[], thinkingEnabled:true, thinkingLevel:'medium', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b', requestTimeout:180000, maxRetries:2, retryDelay:5000};
   let _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE];
   const _tabOrder=['docs','chronicle','timeline','character','faction','item','magic','technique','foreshadow','chat','templates','errorlog'];
   const _tabLabels={'docs':'📂文檔','chronicle':'📋紀要表','timeline':'📈時間線','character':'👤角色','faction':'🏛勢力','item':'📦物品','magic':'✨魔法','technique':'⚡術式','foreshadow':'🔮伏筆','chat':'💬AI聊天','templates':'📐模板','errorlog':'⚠錯誤日誌'};
@@ -687,6 +687,61 @@ function processNextInQueue(){
   _runBatchWithQueue(item.docIdx,item.batchIdx);
 }
 
+// ---- Batch activity log ----
+// Records a timestamped, elapsed-time line on the batch so users can trace
+// exactly what a batch did (start, first token, completion, retries, errors).
+function batchLog(batch,action,detail){
+  if(!batch)return;
+  if(!batch._log)batch._log=[];
+  const el=Date.now()-(batch._startTime||Date.now());
+  batch._log.push({time:new Date().toISOString(),action,detail:(detail==null?'':detail),el});
+  if(batch._log.length>100)batch._log=batch._log.slice(-100);
+}
+
+// Failure handling with automatic retry.
+// Returns true when a retry has been scheduled (caller should NOT move the queue),
+// false when attempts are exhausted (caller should mark pending + continue).
+function batchGiveUp(docIdx,batchIdx,reason){
+  const story=app.currentStory;if(!story)return false;
+  const doc=story.doc[docIdx];if(!doc)return false;
+  const batch=doc.batches[batchIdx];if(!batch)return false;
+  batch._attempts=(batch._attempts||0)+1;
+  batchLog(batch,'失敗',reason);
+  logAiError('批次失敗（第 '+batch._attempts+' 次）',batch._prompt||'',null,reason);
+  const max=app.settings.maxRetries||0;
+  if(batch._attempts<=max){
+    const delay=app.settings.retryDelay||5000;
+    batchLog(batch,'重試','第 '+batch._attempts+'/'+max+' 次重試，'+(delay/1000)+'s 後重新呼叫 AI');
+    batch.status='processing';
+    app.save();
+    setTimeout(()=>_runBatchWithQueue(docIdx,batchIdx),delay);
+    return true;
+  }
+  return false;
+}
+
+function showBatchLog(docIdx,batchIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const batch=doc.batches[batchIdx];if(!batch)return;
+  const logs=batch._log||[];
+  let html='<div style="font-family:monospace;font-size:12px;max-height:60vh;overflow:auto">';
+  if(!logs.length)html+='<div style="color:var(--text3)">尚無記錄</div>';
+  for(const l of logs){
+    const t=new Date(l.time);
+    const hm=String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0');
+    html+=`<div style="padding:3px 0;border-bottom:1px solid var(--border);display:flex;gap:8px">
+      <span style="color:var(--text3);white-space:nowrap">${hm}</span>
+      <span style="color:var(--accent);white-space:nowrap">+${formatTime(l.el)}</span>
+      <span style="color:var(--text2);white-space:nowrap">${escHtml(l.action)}</span>
+      <span style="word-break:break-all">${escHtml(l.detail)}</span>
+    </div>`;
+  }
+  html+='</div>';
+  showModal('批次 #'+(batchIdx+1)+' 處理紀錄',html);
+}
+
+
 function stopBatchProcessing(){
   BatchState.cancel();
   // Reset any processing batches to pending
@@ -712,6 +767,7 @@ function _runBatchWithQueue(docIdx,batchIdx){
   batch.status='processing';renderAll();
   batch._startTime=Date.now();
   batch._streamStartTime=0;
+  batchLog(batch,'開始處理','模式='+app.settings.aiProvider+(batch._attempts?'（第 '+(batch._attempts)+' 次嘗試）':''));
 
   const chronicle=getSheet(story,'chronicle');
   if(!chronicle){processNextInQueue();return}
@@ -772,7 +828,10 @@ function _runBatchWithQueue(docIdx,batchIdx){
         if(delta&&StreamState.statusEl)StreamState.statusEl.innerHTML='📡 串流中...';
       }
       // Record stream start on first real token
-      if(delta&&batch&&!batch._streamStartTime)batch._streamStartTime=Date.now();
+      if(delta&&batch&&!batch._streamStartTime){
+        batch._streamStartTime=Date.now();
+        batchLog(batch,'收到首個 token','等待 '+formatTime(batch._streamStartTime-batch._startTime)+' 後開始回應');
+      }
       const outEl=StreamState.outEl;
       const statusEl=StreamState.statusEl;
       if(outEl){
@@ -795,49 +854,69 @@ function _runBatchWithQueue(docIdx,batchIdx){
         if(statusEl)statusEl.textContent='✅ 完成';
         // Save stream log for later viewing
         if(batch&&fullText)batch._streamLog=fullText;
+        batchLog(batch,'收到完整回覆','耗時 '+formatTime(dur)+'，輸出 '+fullText.length+' 字');
+        let batchWillRetry=false;
         try{
           const cleaned=extractJsonFromResponse(fullText);
           const parsed=JSON.parse(cleaned);
           applyBatchResponseRaw(docIdx,batchIdx,parsed);
+          batchLog(batch,'套用成功','JSON 已解析並寫入各表');
           if(statusEl)statusEl.innerHTML='✅ 處理完成（'+formatTime(dur)+'）';
         }catch(e2){
           logAiError('批次 JSON 解析',prompt,fullText,e2.message);
-          batch.status='pending';renderAll();
-          if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗，請手動修正<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+          batchLog(batch,'JSON 解析失敗',e2.message);
+          batchWillRetry=batchGiveUp(docIdx,batchIdx,'JSON 解析失敗：'+e2.message);
+          if(!batchWillRetry){
+            batch.status='pending';renderAll();
+            if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗，請手動修正<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+          }
         }
         // Delay so user can see result before next batch overwrites panel
-        setTimeout(()=>doneOne(),2000);
+        if(!batchWillRetry)setTimeout(()=>doneOne(),2000);
       }
     }).catch(e=>{
       const outEl=StreamState.outEl;
       const statusEl=StreamState.statusEl;
       if(outEl)outEl.textContent='❌ 串流失敗 ('+e.message+')，改用非串流...';
       if(statusEl)statusEl.innerHTML='❌ 串流失敗，降級至非串流...';
+      batchLog(batch,'串流失敗','降級為非串流：'+e.message);
       return callOllama(prompt,'批次處理').then(resp=>{
+        let batchWillRetry=false;
         if(resp&&resp.response){
           if(outEl)outEl.textContent=resp.response;
           if(statusEl)statusEl.textContent='✅ 完成（非串流）';
           if(batch)batch._streamLog=resp.response;
           batch.duration=Date.now()-(batch._startTime||Date.now());
+          batchLog(batch,'非串流成功','耗時 '+formatTime(batch.duration)+'，輸出 '+resp.response.length+' 字');
           try{
             const cleaned=extractJsonFromResponse(resp.response);
             const parsed=JSON.parse(cleaned);
             applyBatchResponseRaw(docIdx,batchIdx,parsed);
+            batchLog(batch,'套用成功','JSON 已解析並寫入各表');
             if(statusEl)statusEl.innerHTML='✅ 處理完成（非串流）';
           }catch(e2){
-            batch.status='pending';renderAll();
-            if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗（非串流）<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+            batchLog(batch,'JSON 解析失敗',e2.message);
+            batchWillRetry=batchGiveUp(docIdx,batchIdx,'JSON 解析失敗（非串流）：'+e2.message);
+            if(!batchWillRetry){
+              batch.status='pending';renderAll();
+              if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗（非串流）<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+            }
           }
         }else{
-          batch.status='pending';renderAll();
-          if(statusEl)statusEl.innerHTML='❌ 空回覆 — Ollama 未回傳內容';
+          batchWillRetry=batchGiveUp(docIdx,batchIdx,'空回覆 — Ollama 未回傳內容');
+          if(!batchWillRetry){
+            batch.status='pending';renderAll();
+            if(statusEl)statusEl.innerHTML='❌ 空回覆 — Ollama 未回傳內容';
+          }
         }
-        setTimeout(()=>doneOne(),2000);
+        if(!batchWillRetry)setTimeout(()=>doneOne(),2000);
       }).catch(e=>{
         if(outEl)outEl.textContent='❌ 失敗：'+e.message;
         if(statusEl)statusEl.textContent='❌ 失敗';
-        batch.status='pending';renderAll();
-        setTimeout(()=>doneOne(),2000);
+        if(!batchGiveUp(docIdx,batchIdx,'Ollama 呼叫失敗：'+e.message)){
+          batch.status='pending';renderAll();
+          setTimeout(()=>doneOne(),2000);
+        }
       });
     });
   } else if(mode==='deepseek'){
@@ -876,7 +955,10 @@ function _runBatchWithQueue(docIdx,batchIdx){
         if(delta&&StreamState.statusEl)StreamState.statusEl.innerHTML='📡 串流中...';
       }
       // Record stream start on first real token
-      if(delta&&batch&&!batch._streamStartTime)batch._streamStartTime=Date.now();
+      if(delta&&batch&&!batch._streamStartTime){
+        batch._streamStartTime=Date.now();
+        batchLog(batch,'收到首個 token','等待 '+formatTime(batch._streamStartTime-batch._startTime)+' 後開始回應');
+      }
       const outEl=StreamState.outEl;
       const statusEl=StreamState.statusEl;
       if(outEl){
@@ -899,49 +981,69 @@ function _runBatchWithQueue(docIdx,batchIdx){
         if(statusEl)statusEl.textContent='✅ 完成';
         // Save stream log for later viewing
         if(batch&&fullText)batch._streamLog=fullText;
+        batchLog(batch,'收到完整回覆','耗時 '+formatTime(dur)+'，輸出 '+fullText.length+' 字');
+        let batchWillRetry=false;
         try{
           const cleaned=extractJsonFromResponse(fullText);
           const parsed=JSON.parse(cleaned);
           applyBatchResponseRaw(docIdx,batchIdx,parsed);
+          batchLog(batch,'套用成功','JSON 已解析並寫入各表');
           if(statusEl)statusEl.innerHTML='✅ 處理完成（'+formatTime(dur)+'）';
         }catch(e2){
           logAiError('批次 JSON 解析',prompt,fullText,e2.message);
-          batch.status='pending';renderAll();
-          if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗，請手動修正<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+          batchLog(batch,'JSON 解析失敗',e2.message);
+          batchWillRetry=batchGiveUp(docIdx,batchIdx,'JSON 解析失敗：'+e2.message);
+          if(!batchWillRetry){
+            batch.status='pending';renderAll();
+            if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗，請手動修正<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+          }
         }
         // Delay so user can see result before next batch overwrites panel
-        setTimeout(()=>doneOne(),2000);
+        if(!batchWillRetry)setTimeout(()=>doneOne(),2000);
       }
     }).catch(e=>{
       const outEl=StreamState.outEl;
       const statusEl=StreamState.statusEl;
       if(outEl)outEl.textContent='❌ 串流失敗 ('+e.message+')，改用非串流...';
       if(statusEl)statusEl.innerHTML='❌ 串流失敗，降級至非串流...';
+      batchLog(batch,'串流失敗','降級為非串流：'+e.message);
       return callOpenAI(prompt,'批次處理').then(resp=>{
+        let batchWillRetry=false;
         if(resp&&resp.response){
           if(outEl)outEl.textContent=resp.response;
           if(statusEl)statusEl.textContent='✅ 完成（非串流）';
           if(batch)batch._streamLog=resp.response;
           batch.duration=Date.now()-(batch._startTime||Date.now());
+          batchLog(batch,'非串流成功','耗時 '+formatTime(batch.duration)+'，輸出 '+resp.response.length+' 字');
           try{
             const cleaned=extractJsonFromResponse(resp.response);
             const parsed=JSON.parse(cleaned);
             applyBatchResponseRaw(docIdx,batchIdx,parsed);
+            batchLog(batch,'套用成功','JSON 已解析並寫入各表');
             if(statusEl)statusEl.innerHTML='✅ 處理完成（非串流）';
           }catch(e2){
-            batch.status='pending';renderAll();
-            if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗（非串流）<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+            batchLog(batch,'JSON 解析失敗',e2.message);
+            batchWillRetry=batchGiveUp(docIdx,batchIdx,'JSON 解析失敗（非串流）：'+e2.message);
+            if(!batchWillRetry){
+              batch.status='pending';renderAll();
+              if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗（非串流）<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+            }
           }
         }else{
-          batch.status='pending';renderAll();
-          if(statusEl)statusEl.innerHTML='❌ 空回覆 — DeepSeek 未回傳內容';
+          batchWillRetry=batchGiveUp(docIdx,batchIdx,'空回覆 — DeepSeek 未回傳內容');
+          if(!batchWillRetry){
+            batch.status='pending';renderAll();
+            if(statusEl)statusEl.innerHTML='❌ 空回覆 — DeepSeek 未回傳內容';
+          }
         }
-        setTimeout(()=>doneOne(),2000);
+        if(!batchWillRetry)setTimeout(()=>doneOne(),2000);
       }).catch(e=>{
         if(outEl)outEl.textContent='❌ 失敗：'+e.message;
         if(statusEl)statusEl.textContent='❌ 失敗';
-        batch.status='pending';renderAll();
-        setTimeout(()=>doneOne(),2000);
+        if(!batchGiveUp(docIdx,batchIdx,'DeepSeek 呼叫失敗：'+e.message)){
+          batch.status='pending';renderAll();
+          setTimeout(()=>doneOne(),2000);
+        }
       });
     });
   } else {
@@ -952,6 +1054,10 @@ function _runBatchWithQueue(docIdx,batchIdx){
 }
 
 function processBatch(docIdx,batchIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const batch=doc.batches[batchIdx];if(!batch)return;
+  delete batch._attempts;
   enqueueBatch(docIdx,batchIdx);
   if(BatchState.length===1)processNextInQueue();
 }
@@ -1172,6 +1278,7 @@ function applyBatchResponseRaw(docIdx,batchIdx,resp){
   // --- 5. Timeline is now post-processing (use AI button in timeline tab) ---
 
   batch.status='done';batch.result=row;
+  delete batch._attempts;
   app.save();renderAll();
 }
 
@@ -1508,12 +1615,13 @@ function clearErrorLog(){
 async function callOllama(prompt,context){
   const url=app.settings.ollamaUrl;
   const model=app.settings.ollamaModel;
+  const timeout=app.settings.requestTimeout||180000;
   try{
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model, prompt, stream:false}),
-      signal:AbortSignal.timeout(180000)
+      signal:AbortSignal.timeout(timeout)
     });
     if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
     const data=await resp.json();
@@ -1534,12 +1642,13 @@ async function callOllamaStream(prompt,context,onToken){
   const model=app.settings.ollamaModel;
   let fullText='';
   let rawBuf='';
+  const timeout=app.settings.requestTimeout||180000;
   try{
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model, prompt, stream:true}),
-      signal:AbortSignal.timeout(180000)
+      signal:AbortSignal.timeout(timeout)
     });
     if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
 
@@ -1627,12 +1736,13 @@ async function callOpenAI(prompt,context){
   const url=base+'/chat/completions';
   const model=app.settings.deepseekModel||'deepseek-chat';
   const key=app.settings.apiKey;
+  const timeout=app.settings.requestTimeout||180000;
   try{
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
       body:JSON.stringify({model,messages:[{role:'user',content:prompt}],stream:false}),
-      signal:AbortSignal.timeout(180000)
+      signal:AbortSignal.timeout(timeout)
     });
     if(!resp.ok)throw new Error('OpenAI HTTP '+resp.status);
     const data=await resp.json();
@@ -1653,12 +1763,13 @@ async function callOpenAIStream(prompt,context,onToken){
   const model=app.settings.deepseekModel||'deepseek-chat';
   const key=app.settings.apiKey;
   let fullText='';
+  const timeout=app.settings.requestTimeout||180000;
   try{
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
       body:JSON.stringify({model,messages:[{role:'user',content:prompt}],stream:true}),
-      signal:AbortSignal.timeout(180000)
+      signal:AbortSignal.timeout(timeout)
     });
     if(!resp.ok)throw new Error('OpenAI HTTP '+resp.status);
     if(!resp.body||!resp.body.getReader){
@@ -2355,6 +2466,7 @@ function renderDocsPanel(el,story){
       if(b.result)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchResult(${di},${bi})">查看結果</button>`;
       if(b._prompt)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchPrompt(${di},${bi})">📄提示詞</button>`;
       if(b._streamLog&&b._streamLog.length>10)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchFullOutput(${di},${bi})">查看 AI 輸出結果</button>`;
+      if(b._log&&b._log.length>0)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchLog(${di},${bi})" title="查看此批次的完整處理紀錄（含重試與耗時）">📋紀錄</button>`;
       if(effectiveStatus==='done'&&b.result)html+=`<button class="btn btn-sm btn-danger" onclick="clearBatchResult(${di},${bi})">清除結果</button>`;
       html+=`</div></div>`;
     }
@@ -3134,7 +3246,7 @@ function exportStory(){
 function exportStoryHTML(){
   const story=app.currentStory;
   if(!story)return alert('請先選擇故事');
-  const sheets=Object.values(story.sheets);
+  const sheets=Object.values(story.sheets).filter(s=>s&&s.columns);
 
   // Build a sorted table for each sheet, using the same rules as the UI
   function buildSheetTable(sheet){
@@ -3170,11 +3282,16 @@ function exportStoryHTML(){
     return t;
   }
 
-  let body='';
-  for(const sheet of sheets){
-    if(!sheet||!sheet.columns)continue;
-    body+=buildSheetTable(sheet)+'\n';
-  }
+  // Build tab bar + panels. Each sheet gets its own tab; "全部" shows all.
+  let tabs='', panels='';
+  const tabsHtml=(idx,name)=>
+    `<button class="tab${idx===0?' active':''}" data-tab="${idx}" onclick="showTab(${idx})">${escHtml(name)}</button>`;
+  tabs+=tabsHtml(0,'全部');
+  panels+=`<div class="panel active" id="panel_all">\n${sheets.map(buildSheetTable).join('\n')}\n</div>`;
+  sheets.forEach((sheet,i)=>{
+    tabs+=tabsHtml(i+1,sheet.name);
+    panels+=`<div class="panel" id="panel_${i+1}">\n${buildSheetTable(sheet)}\n</div>`;
+  });
 
   const html=`<!DOCTYPE html>
 <html lang="zh-TW">
@@ -3184,16 +3301,33 @@ function exportStoryHTML(){
 <style>
 body{font-family:'Segoe UI','Noto Sans TC','Microsoft JhengHei',sans-serif;background:#0f1117;color:#e0e0e0;padding:24px;max-width:1200px;margin:0 auto}
 h1{border-bottom:2px solid #6c8cff;padding-bottom:8px}
-h2{color:#6c8cff;margin-top:32px}
 h3{color:#6c8cff;margin-top:24px}
 th{font-weight:600;text-align:left}
 td{vertical-align:top}
-@media print{body{background:#fff;color:#000}th{background:#eee!important;color:#000!important}}
+.tabbar{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 8px;position:sticky;top:0;background:#0f1117;padding:8px 0;z-index:10}
+.tab{background:#1e2130;color:#c8c9d4;border:1px solid #33364a;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+.tab:hover{border-color:#6c8cff}
+.tab.active{background:#6c8cff;color:#fff;border-color:#6c8cff}
+.panel{display:none}
+.panel.active{display:block}
+@media print{
+  body{background:#fff;color:#000}
+  th{background:#eee!important;color:#000!important}
+  .tabbar{display:none}
+  .panel{display:block!important}
+}
 </style>
 </head>
 <body>
 <h1>${escHtml(story.name)}</h1>
-${body}
+<div class="tabbar">${tabs}</div>
+${panels}
+<script>
+function showTab(n){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',parseInt(b.dataset.tab)===n));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.id==='panel_'+(n===0?'all':n)));
+}
+<\/script>
 </body>
 </html>`;
   const blob=new Blob([html],{type:'text/html;charset=utf-8'});
@@ -3337,6 +3471,9 @@ function showSettings(){
   showModal('設定',`
     <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:13px">
       <span>Token 上限</span><input id="setToken" type="number" value="${s.tokenLimit}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+      <span>請求逾時(秒)</span><input id="setTimeout" type="number" value="${Math.round((s.requestTimeout||180000)/1000)}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="單次 API 請求逾時上限，單位秒">
+      <span>失敗重試次數</span><input id="setRetries" type="number" value="${s.maxRetries!=null?s.maxRetries:2}" min="0" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="API 呼叫失敗時自動重試的次數">
+      <span>重試間隔(秒)</span><input id="setRetryDelay" type="number" value="${Math.round((s.retryDelay||5000)/1000)}" min="1" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" title="每次重試之間的等待秒數">
       <span>AI 模式</span><select id="setAiMode" onchange="toggleAiModeFields()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px">
         <option value="prompt"${s.aiProvider==='prompt'?' selected':''}>Prompt 模式（手動複製）</option>
         <option value="ollama"${s.aiProvider==='ollama'?' selected':''}>Ollama 本地</option>
@@ -3419,6 +3556,9 @@ window.toggleAiModeFields=function(){
 function saveSettings(){
   const s=app.settings;
   s.tokenLimit=parseInt(document.getElementById('setToken')?.value)||2000;
+  s.requestTimeout=(parseInt(document.getElementById('setTimeout')?.value)||180)*1000;
+  s.maxRetries=parseInt(document.getElementById('setRetries')?.value)||0;
+  s.retryDelay=(parseInt(document.getElementById('setRetryDelay')?.value)||5)*1000;
   s.aiProvider=document.getElementById('setAiMode')?.value||'prompt';
   s.apiKey=document.getElementById('setApiKey')?.value||'';
   s.apiEndpoint=document.getElementById('setApiUrl')?.value||'';
