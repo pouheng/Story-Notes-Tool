@@ -134,7 +134,7 @@ const JK_TEMPLATE = {
 - chronicle: 紀要 — 200~450字，客觀按時間順序敘述事實，禁止結尾昇華、禁止評價
 - summary: 概覽 — 50字以內，2~3句濃縮核心事件
 - important_lines: 重要對白 — 單一字串，摘錄至少4句關鍵對話，標註說話者。多句以\\n串接。
-- code_index: 編碼索引 — 自動編號，接續上一個編號+1
+- code_index: 填空字串""即可，系統會自動編號
 
 ## 禁止
 - 編造內容中不存在的事件或對白
@@ -301,7 +301,7 @@ const GEN_TEMPLATE = {
 - chronicle: 紀要 — 200~450字客觀敘述，禁止結尾昇華
 - summary: 概覽 — 50字以內濃縮
 - important_lines: 重要對白 — 單一字串，多句以\\n串接
-- code_index: 編碼索引 — 自動編號
+- code_index: 填空字串""即可，系統會自動編號
 
 ## 禁止：編造、markdown包裝、使用陣列
 用繁體中文。`,
@@ -334,7 +334,7 @@ const MAGIC_SCHOOL_TEMPLATE = {
   sheets:{
     chronicle:{
       uid:'sheet_chronicle',name:'紀要表',
-      prompt:'# 紀要表填充規則\n從本次內容產出一條新條目。所有欄位值都是**單一字串**，對白多句以換行符(\\n)串聯。用繁體中文。\n\n## 必填\n- time_span: 時間 — 如「2月1日，早上9:05」\n- location: 地點 — 如「訓練場」「教室」\n- chronicle: 紀要 — 150~400字客觀敘述\n- summary: 概覽 — 50字內濃縮\n- important_lines: 重要對白 — 標註說話者，多句以\\n串接\n- code_index: 編碼索引\n\n## 禁止：編造、markdown包裝、使用陣列',
+      prompt:'# 紀要表填充規則\n從本次內容產出一條新條目。所有欄位值都是**單一字串**，對白多句以換行符(\\n)串聯。用繁體中文。\n\n## 必填\n- time_span: 時間 — 如「2月1日，早上9:05」\n- location: 地點 — 如「訓練場」「教室」\n- chronicle: 紀要 — 150~400字客觀敘述\n- summary: 概覽 — 50字內濃縮\n- important_lines: 重要對白 — 標註說話者，多句以\\n串接\n- code_index: 填空字串""即可，系統會自動編號\n\n## 禁止：編造、markdown包裝、使用陣列',
       columns:[
         {key:'row_id',name:'row_id',type:'hidden'},
         {key:'time_span',name:'時間',type:'text'},
@@ -648,6 +648,20 @@ function splitSentencesWithPos(text){
 }
 function formatDate(d){const dt=new Date(d);return dt.toISOString().slice(0,16).replace('T',' ')}
 function nextCode(rows){const n=rows.length;return 'AM'+String(n+1).padStart(4,'0')}
+// Deterministic chronicle code: scan existing code_index values, find the largest
+// numeric suffix, and return the next one. Never trusts the AI's own numbering
+// (which can duplicate or skip), so codes stay unique and sequential.
+function nextChronicleCode(rows){
+  let max=0;
+  for(const r of rows||[]){
+    const c=String(r.code_index||'');
+    const m=c.match(/(\d+)\s*$/);
+    if(m)max=Math.max(max,parseInt(m[1],10));
+  }
+  const next=max+1;
+  const width=next>=1000?4:(next>=100?3:3);
+  return 'CHRONICLE-'+String(next).padStart(width,'0');
+}
 function getSheet(story,sid){return story.sheets[sid]||null}
 function getSheetByUid(story,uid){return Object.values(story.sheets).find(s=>s.uid===uid)}
 
@@ -1380,7 +1394,10 @@ function applyBatchResponseRaw(docIdx,batchIdx,resp){
     chronicle:chData.chronicle||'',
     summary:chData.summary||'',
     important_lines:chData.important_lines||'',
-    code_index:chData.code_index||nextCode(chronicle.rows),
+    // Always assign the next deterministic code — the AI's code_index is
+    // unreliable (it can duplicate or skip numbers), which made codes look
+    // like "one is missing".
+    code_index:nextChronicleCode(chronicle.rows),
     _batchId:batch.id
   };
   chronicle.rows.push(row);
@@ -2898,6 +2915,20 @@ function renderChroniclePanel(el,story){
   renderSheet(el,sheet);
 }
 
+// Re-assign sequential CHRONICLE-001… codes to all chronicle rows (in array order),
+// fixing duplicates/skips caused by AI-generated numbering.
+function renumberChronicle(){
+  const story=app.currentStory;if(!story)return;
+  const sheet=getSheet(story,'chronicle');
+  if(!sheet)return;
+  if(!confirm('依目前順序重新編號所有紀要條目（CHRONICLE-001…）？此操作會覆蓋現有編號。'))return;
+  sheet.rows.forEach((r,i)=>{
+    r.code_index='CHRONICLE-'+String(i+1).padStart(3,'0');
+  });
+  app.save();renderAll();
+  alert('已重新編號 '+(sheet.rows.length)+' 筆紀要條目');
+}
+
 function renderSheetPanel(el,story,sid){
   if(!story){el.innerHTML='';return}
   const sheet=getSheet(story,sid);
@@ -2955,6 +2986,7 @@ function renderSheet(el,sheet){
   let html='<div style="overflow:auto;flex:1">';
   html+=`<div style="margin-bottom:8px;font-size:14px;font-weight:600;color:var(--accent)">${escHtml(sheet.name)}</div>`;
   html+=`<button class="btn btn-sm mb-8" onclick="addSheetRow('${sheet.uid}')">＋新增行</button>`;
+  if(sheet.uid==='sheet_chronicle')html+=`<button class="btn btn-sm btn-outline mb-8" onclick="renumberChronicle()" title="依目前順序重新編號 CHRONICLE-001、002…，修正重複或跳號">🔢 重編紀要編號</button>`;
   html+=`<span style="font-size:12px;color:var(--text3);margin-left:8px">${sort&&sort.key?('排序：'+sort.key+' '+((sort.dir==='asc')?'▲':'▼')):''}</span>`;
   html+='<table class="grid-table"><thead><tr>';
   for(const col of cols){
