@@ -468,20 +468,25 @@ const app = (()=>{
   }
 
   // ---- IndexedDB storage (primary; much larger quota than localStorage ~5MB) ----
-  let _db=null,_dbReady=null,_loaded=false;
+  let _db=null,_dbReady=null;
   function openDB(){
     if(_dbReady)return _dbReady;
     _dbReady=new Promise(resolve=>{
       if(!window.indexedDB){resolve(null);return}
+      let settled=false;
+      const done=db=>{if(!settled){settled=true;clearTimeout(timer);_db=db;resolve(db)}};
+      // Safety net: never hang the boot even if IndexedDB is blocked/slow.
+      const timer=setTimeout(()=>done(null),3000);
       try{
         const req=indexedDB.open('storyAppDB',1);
         req.onupgradeneeded=()=>{
           const db=req.result;
           if(!db.objectStoreNames.contains('kv'))db.createObjectStore('kv');
         };
-        req.onsuccess=()=>{_db=req.result;resolve(_db)};
-        req.onerror=()=>resolve(null);
-      }catch(e){resolve(null)}
+        req.onsuccess=()=>done(req.result);
+        req.onerror=()=>done(null);
+        req.onblocked=()=>done(null);
+      }catch(e){done(null)}
     });
     return _dbReady;
   }
@@ -561,22 +566,27 @@ const app = (()=>{
     }
     if(p.settings)_settings={..._settings,...p.settings};
   }
-  async function load(){
-    if(_loaded)return;
-    _loaded=true;
-    // Prefer IndexedDB (may hold data larger than localStorage).
-    try{
-      const idbData=await idbGet('storyApp');
-      if(idbData){applyPersisted(JSON.parse(idbData));return;}
-    }catch(e){}
-    // Fallback: localStorage from previous versions; then push it up to IndexedDB.
-    try{
-      const d=localStorage.getItem('storyApp');
-      if(d){
-        applyPersisted(JSON.parse(d));
-        save(); // migrate old localStorage data into IndexedDB
-      }
-    }catch(e){}
+  let _loadPromise=null;
+  function load(){
+    // Idempotent async load: share one promise so both module-init and
+    // DOMContentLoaded wait for the SAME load, never a stale fast-return.
+    if(_loadPromise)return _loadPromise;
+    _loadPromise=(async()=>{
+      // Prefer IndexedDB (may hold data larger than localStorage).
+      try{
+        const idbData=await idbGet('storyApp');
+        if(idbData){applyPersisted(JSON.parse(idbData));return;}
+      }catch(e){}
+      // Fallback: localStorage from previous versions; then push it up to IndexedDB.
+      try{
+        const d=localStorage.getItem('storyApp');
+        if(d){
+          applyPersisted(JSON.parse(d));
+          save(); // migrate old localStorage data into IndexedDB
+        }
+      }catch(e){}
+    })();
+    return _loadPromise;
   }
   function debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(save,100)}
 
