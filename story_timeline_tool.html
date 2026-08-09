@@ -432,40 +432,75 @@ const app = (()=>{
   }
 
   // --- Persistence ---
-  function stripBatchPayloads(stories){
-    // Remove recoverable batch text (rebuildable from doc.text via start/end).
+  // Transient batch fields: rebuildable or session-only, stripped when under storage pressure.
+  const TRANSIENT_BATCH_FIELDS=['_streamLog','_prompt','_startTime','_streamStartTime','_attempts','_duration'];
+  function stripBatchPayloads(stories,level){
+    // level 1: remove recoverable batch text (rebuildable from doc.text via start/end).
+    // level 2: also drop transient AI fields (_streamLog/_prompt/_startTime/...) EXCEPT on
+    //          batches currently processing (their timing/log fields are live).
+    // level 3: also drop the per-batch activity log and truncate errorLog.
     let stripped=0;
     for(const s of stories||[]){
       for(const d of s.doc||[]){
         for(const b of d.batches||[]){
-          if(b.text&&b.start!=null){
-            delete b.text;
+          if(b.text&&b.start!=null){delete b.text;stripped++;}
+          if(level>=2&&b.status!=='processing'){
+            for(const k of TRANSIENT_BATCH_FIELDS){
+              if(k in b){delete b[k];stripped++;}
+            }
+          }
+          if(level>=3&&b._log){
+            b._log=b._log.slice(-5);
             stripped++;
           }
         }
+      }
+      if(level>=3&&s.errorLog&&s.errorLog.length>10){
+        s.errorLog=s.errorLog.slice(-10);
+        for(const e of s.errorLog){
+          if(e.fullRequest)e.fullRequest=e.fullRequest.slice(0,500);
+          if(e.fullResponse)e.fullResponse=e.fullResponse.slice(0,500);
+        }
+        stripped++;
       }
     }
     return stripped;
   }
   function save(){
     clearTimeout(_saveTimer);
-    // Before persisting, strip batch text for all batches that have start/end —
-    // they are rebuildable from doc.text, so we never store duplicated content.
-    const stripped=stripBatchPayloads(_stories);
+    // Tier 1: full save (only strips recoverable batch text).
+    let stripped=stripBatchPayloads(_stories,1);
     let json;
+    const payload=()=>JSON.stringify({
+      stories:_stories, currentStoryId:_currentStoryId,
+      templates:_templates, settings:_settings
+    });
     try{
-      json=JSON.stringify({
-        stories:_stories, currentStoryId:_currentStoryId,
-        templates:_templates, settings:_settings
-      });
+      json=payload();
       localStorage.setItem('storyApp',json);
       if(stripped>0)console.warn('已自動剝離 '+stripped+' 筆批次內容（由 doc.text 座標還原）');
     }catch(e){
-      // Quota exceeded even after stripping — surface a visible warning.
+      // Tier 2: drop transient AI fields (_streamLog/_prompt/etc) and retry.
       try{
-        console.warn('儲存失敗，可能 localStorage 已滿',e.message);
-        window._storageError='儲存空間不足：批次可能不會被保存。請匯出故事備份並刪除較舊的故事/文檔。';
-      }catch(e2){}
+        stripped=stripBatchPayloads(_stories,2);
+        json=payload();
+        localStorage.setItem('storyApp',json);
+        console.warn('儲存空間吃緊：已移除臨時批次欄位（'+stripped+' 項）以完成儲存');
+      }catch(e2){
+        // Tier 3: drop activity logs and shrink errorLog, then retry.
+        try{
+          stripped=stripBatchPayloads(_stories,3);
+          json=payload();
+          localStorage.setItem('storyApp',json);
+          console.warn('儲存空間吃緊：已移除處理紀錄與舊錯誤日誌（'+stripped+' 項）');
+        }catch(e3){
+          // Give up and surface a visible warning.
+          try{
+            console.warn('儲存失敗，可能 localStorage 已滿',e3.message);
+            window._storageError='⚠ 儲存空間不足：最近的處理結果可能不會被保存。建議立即匯出故事備份（💾匯出），並刪除較舊的故事或文檔。';
+          }catch(e4){}
+        }
+      }
     }
   }
   function load(){
@@ -1562,8 +1597,8 @@ function logAiError(context,request,response,error){
     requestPreview:reqStr.slice(0,2000),
     responsePreview:respStr.slice(0,2000)||'(空回覆)',
     error:error||'',
-    fullRequest:reqStr,
-    fullResponse:respStr
+    fullRequest:reqStr.slice(0,8000),
+    fullResponse:respStr.slice(0,8000)
   });
   if(story.errorLog.length>100)story.errorLog=story.errorLog.slice(-100);
   app.save();
@@ -2365,6 +2400,10 @@ function renderAll(){
   // Render each panel content
   const panelsHtml=visibleTabs.map(t=>`<div class="panel" id="panel_${t}"></div>`).join('');
   main.innerHTML=panelsHtml;
+  // Surface storage-pressure warning if a recent save failed
+  if(window._storageError){
+    main.insertAdjacentHTML('afterbegin',`<div style="background:var(--red);color:#fff;padding:8px 12px;margin-bottom:10px;border-radius:6px;font-size:13px">${escHtml(window._storageError)}</div>`);
+  }
 
   // Fill panel contents
   for(const t of visibleTabs){
