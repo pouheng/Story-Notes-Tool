@@ -414,7 +414,7 @@ const app = (()=>{
   // --- Private state ---
   let _stories=[];
   let _currentStoryId=null;
-  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b'};
+  let _settings={tokenLimit:2000, aiProvider:'prompt', apiKey:'', apiEndpoint:'', deepseekModel:'deepseek-chat', openaiModels:[], thinkingEnabled:true, thinkingLevel:'medium', ollamaUrl:'http://localhost:11434/api/generate', ollamaModel:'gemma4:12b'};
   let _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE];
   const _tabOrder=['docs','chronicle','timeline','character','faction','item','magic','technique','foreshadow','chat','templates','errorlog'];
   const _tabLabels={'docs':'📂文檔','chronicle':'📋紀要表','timeline':'📈時間線','character':'👤角色','faction':'🏛勢力','item':'📦物品','magic':'✨魔法','technique':'⚡術式','foreshadow':'🔮伏筆','chat':'💬AI聊天','templates':'📐模板','errorlog':'⚠錯誤日誌'};
@@ -431,14 +431,41 @@ const app = (()=>{
   }
 
   // --- Persistence ---
+  function stripBatchPayloads(stories){
+    // Remove recoverable batch text (rebuildable from doc.text via start/end).
+    let stripped=0;
+    for(const s of stories||[]){
+      for(const d of s.doc||[]){
+        for(const b of d.batches||[]){
+          if(b.text&&b.start!=null){
+            delete b.text;
+            stripped++;
+          }
+        }
+      }
+    }
+    return stripped;
+  }
   function save(){
     clearTimeout(_saveTimer);
+    // Before persisting, strip batch text for all batches that have start/end —
+    // they are rebuildable from doc.text, so we never store duplicated content.
+    const stripped=stripBatchPayloads(_stories);
+    let json;
     try{
-      localStorage.setItem('storyApp',JSON.stringify({
+      json=JSON.stringify({
         stories:_stories, currentStoryId:_currentStoryId,
         templates:_templates, settings:_settings
-      }));
-    }catch(e){}
+      });
+      localStorage.setItem('storyApp',json);
+      if(stripped>0)console.warn('已自動剝離 '+stripped+' 筆批次內容（由 doc.text 座標還原）');
+    }catch(e){
+      // Quota exceeded even after stripping — surface a visible warning.
+      try{
+        console.warn('儲存失敗，可能 localStorage 已滿',e.message);
+        window._storageError='儲存空間不足：批次可能不會被保存。請匯出故事備份並刪除較舊的故事/文檔。';
+      }catch(e2){}
+    }
   }
   function load(){
     try{
@@ -502,6 +529,17 @@ function splitSentences(text){
   const m=text.match(re);
   if(!m)return text.trim()?[text.trim()]:[];
   return m.map(s=>s.trim()).filter(s=>s.length>0);
+}
+function splitSentencesWithPos(text){
+  const re=/([^。！？\.!\?\n]+[。！？\.!\?\n]?)/g;
+  const out=[];
+  let match;
+  while((match=re.exec(text))!==null){
+    const t=match[1].trim();
+    if(t.length>0)out.push({text:t,start:match.index,end:match.index+match[1].length});
+  }
+  if(out.length===0&&text.trim())out.push({text:text.trim(),start:0,end:text.length});
+  return out;
 }
 function formatDate(d){const dt=new Date(d);return dt.toISOString().slice(0,16).replace('T',' ')}
 function nextCode(rows){const n=rows.length;return 'AM'+String(n+1).padStart(4,'0')}
@@ -580,26 +618,32 @@ function importDocument(){
   input.click();
 }
 
-function addDocument(story,name,text){
-  const doc={id:uid(),name,text,imported:new Date().toISOString(),batches:[]};
+function splitTextToBatches(text){
   const tokenLimit=app.settings.tokenLimit;
-  const sents=splitSentences(text);
+  const sents=splitSentencesWithPos(text);
+  const batches=[];
   let batch=null;
   for(const sent of sents){
-    const t=countTokens(sent);
+    const t=countTokens(sent.text);
     if(t>tokenLimit){
-      if(batch){doc.batches.push(batch);batch=null}
-      doc.batches.push({id:uid(),text:sent,tokens:t,status:'pending'});
+      if(batch){batches.push(batch);batch=null}
+      batches.push({id:uid(),text:sent.text,tokens:t,status:'pending',start:sent.start,end:sent.end});
       continue;
     }
-    if(!batch){batch={id:uid(),text:sent,tokens:t,status:'pending'}}
+    if(!batch){batch={id:uid(),text:sent.text,tokens:t,status:'pending',start:sent.start,end:sent.end}}
     else{
       const nt=batch.tokens+t;
-      if(nt<=tokenLimit){batch.text+='\n'+sent;batch.tokens=nt}
-      else{doc.batches.push(batch);batch={id:uid(),text:sent,tokens:t,status:'pending'}}
+      if(nt<=tokenLimit){batch.text+='\n'+sent.text;batch.tokens=nt;batch.end=sent.end}
+      else{batches.push(batch);batch={id:uid(),text:sent.text,tokens:t,status:'pending',start:sent.start,end:sent.end}}
     }
   }
-  if(batch)doc.batches.push(batch);
+  if(batch)batches.push(batch);
+  return batches;
+}
+
+function addDocument(story,name,text){
+  const doc={id:uid(),name,text,imported:new Date().toISOString(),batches:[]};
+  doc.batches=splitTextToBatches(text);
   story.doc.push(doc);
   app.save();renderAll();
 }
@@ -607,25 +651,7 @@ function addDocument(story,name,text){
 function splitDocument(docIdx){
   const story=app.currentStory;if(!story)return;
   const doc=story.doc[docIdx];if(!doc)return;
-  const tokenLimit=app.settings.tokenLimit;
-  const sents=splitSentences(doc.text);
-  doc.batches=[];
-  let batch=null;
-  for(const sent of sents){
-    const t=countTokens(sent);
-    if(t>tokenLimit){
-      if(batch){doc.batches.push(batch);batch=null}
-      doc.batches.push({id:uid(),text:sent,tokens:t,status:'pending'});
-      continue;
-    }
-    if(!batch){batch={id:uid(),text:sent,tokens:t,status:'pending'}}
-    else{
-      const nt=batch.tokens+t;
-      if(nt<=tokenLimit){batch.text+='\n'+sent;batch.tokens=nt}
-      else{doc.batches.push(batch);batch={id:uid(),text:sent,tokens:t,status:'pending'}}
-    }
-  }
-  if(batch)doc.batches.push(batch);
+  doc.batches=splitTextToBatches(doc.text);
 }
 
 // ============ BATCH RUNNER MODULE ============
@@ -678,6 +704,10 @@ function _runBatchWithQueue(docIdx,batchIdx){
   if(!story){processNextInQueue();return}
   const doc=story.doc[docIdx];if(!doc){processNextInQueue();return}
   const batch=doc.batches[batchIdx];if(!batch){processNextInQueue();return}
+  // Recover batch text from doc if stripped (saves localStorage space)
+  if(!batch.text&&batch.start!=null)batch.text=doc.text.slice(batch.start,batch.end);
+  // Old batches may lack start/end; fall back to whole doc text as last resort
+  if(!batch.text)batch.text=doc.text;
   batch.status='processing';renderAll();
   batch._startTime=Date.now();
   batch._streamStartTime=0;
@@ -685,7 +715,7 @@ function _runBatchWithQueue(docIdx,batchIdx){
   const chronicle=getSheet(story,'chronicle');
   if(!chronicle){processNextInQueue();return}
 
-  const prompt=generateBatchPrompt(story,batch);
+  const prompt=applyThinkingMode(generateBatchPrompt(story,batch));
   batch._prompt=prompt;
   const mode=app.settings.aiProvider;
 
@@ -708,6 +738,32 @@ function _runBatchWithQueue(docIdx,batchIdx){
     if(StreamState.el){
       showStreamPanel(docIdx,batchIdx,prompt);
     }
+    // Start live timer immediately (even before first token) so a stuck/cold-start
+    // request still shows elapsed time instead of "連線中..." forever
+    if(!StreamState._timer){
+      StreamState._lastOutput='';
+      StreamState._timer=setInterval(()=>{
+        const se=StreamState.statusEl;
+        if(!se)return;
+        const elapsed=Date.now()-(batch._startTime||Date.now());
+        const streamElapsed=Date.now()-(batch._streamStartTime||Date.now());
+        let text='⏱ '+formatTime(elapsed);
+        if(batch._streamStartTime&&streamElapsed>2000){
+          const curLen=(StreamState._lastOutput||'').length;
+          if(curLen>10){
+            const speed=curLen/(streamElapsed/1000);
+            const ratio=Metrics.getAvgOutputRatio();
+            const estimatedTotal=Math.max(curLen,(batch._prompt?.length||0)*ratio);
+            const remain=(estimatedTotal-curLen)/speed;
+            if(remain>0&&remain<3600)text+=' · 預計剩 '+formatTime(remain*1000);
+          }
+        }else if(!batch._streamStartTime){
+          // Still waiting for first token — show a spinner-ish hint
+          text+=' · 等待 AI 開始回應...';
+        }
+        if(se.innerHTML!==text)se.innerHTML=text;
+      },1000);
+    }
     callOllamaStream(prompt,'批次處理',(fullText,delta,done)=>{
       // Ensure panel tracks this batch (handles late panel open)
       if(StreamState.el&&(StreamState.docIdx!==docIdx||StreamState.batchIdx!==batchIdx)){
@@ -725,28 +781,6 @@ function _runBatchWithQueue(docIdx,batchIdx){
         }
         outEl.textContent=fullText;
         outEl.scrollTop=outEl.scrollHeight;
-      }
-      // Start live timer on first token
-      if(delta&&!StreamState._timer){
-        StreamState._lastOutput=fullText;
-        StreamState._timer=setInterval(()=>{
-          const se=StreamState.statusEl;
-          if(!se)return;
-          const elapsed=Date.now()-(batch._startTime||Date.now());
-          const streamElapsed=Date.now()-(batch._streamStartTime||Date.now());
-          let text='⏱ '+formatTime(elapsed);
-          if(streamElapsed>2000){
-            const curLen=StreamState._lastOutput.length;
-            if(curLen>10){
-              const speed=curLen/(streamElapsed/1000);
-              const ratio=Metrics.getAvgOutputRatio();
-              const estimatedTotal=Math.max(curLen,(batch._prompt?.length||0)*ratio);
-              const remain=(estimatedTotal-curLen)/speed;
-              if(remain>0&&remain<3600)text+=' · 預計剩 '+formatTime(remain*1000);
-            }
-          }
-          if(se.innerHTML!==text)se.innerHTML=text;
-        },1000);
       }
       StreamState._lastOutput=fullText;
       if(done){
@@ -796,6 +830,110 @@ function _runBatchWithQueue(docIdx,batchIdx){
         }else{
           batch.status='pending';renderAll();
           if(statusEl)statusEl.innerHTML='❌ 空回覆 — Ollama 未回傳內容';
+        }
+        setTimeout(()=>doneOne(),2000);
+      }).catch(e=>{
+        if(outEl)outEl.textContent='❌ 失敗：'+e.message;
+        if(statusEl)statusEl.textContent='❌ 失敗';
+        batch.status='pending';renderAll();
+        setTimeout(()=>doneOne(),2000);
+      });
+    });
+  } else if(mode==='deepseek'){
+    // Only show panel if live stream is toggled on
+    if(StreamState.el){
+      showStreamPanel(docIdx,batchIdx,prompt);
+    }
+    // Start live timer immediately so a stuck request shows elapsed time
+    if(!StreamState._timer){
+      StreamState._lastOutput='';
+      StreamState._timer=setInterval(()=>{
+        const se=StreamState.statusEl;
+        if(!se)return;
+        const elapsed=Date.now()-(batch._startTime||Date.now());
+        const streamElapsed=Date.now()-(batch._streamStartTime||Date.now());
+        let text='⏱ '+formatTime(elapsed);
+        if(batch._streamStartTime&&streamElapsed>2000){
+          const curLen=(StreamState._lastOutput||'').length;
+          if(curLen>10){
+            const speed=curLen/(streamElapsed/1000);
+            const ratio=Metrics.getAvgOutputRatio();
+            const estimatedTotal=Math.max(curLen,(batch._prompt?.length||0)*ratio);
+            const remain=(estimatedTotal-curLen)/speed;
+            if(remain>0&&remain<3600)text+=' · 預計剩 '+formatTime(remain*1000);
+          }
+        }else if(!batch._streamStartTime){
+          text+=' · 等待 AI 開始回應...';
+        }
+        if(se.innerHTML!==text)se.innerHTML=text;
+      },1000);
+    }
+    callOpenAIStream(prompt,'批次處理',(fullText,delta,done)=>{
+      // Ensure panel tracks this batch (handles late panel open)
+      if(StreamState.el&&(StreamState.docIdx!==docIdx||StreamState.batchIdx!==batchIdx)){
+        StreamState.docIdx=docIdx;StreamState.batchIdx=batchIdx;
+        if(delta&&StreamState.statusEl)StreamState.statusEl.innerHTML='📡 串流中...';
+      }
+      // Record stream start on first real token
+      if(delta&&batch&&!batch._streamStartTime)batch._streamStartTime=Date.now();
+      const outEl=StreamState.outEl;
+      const statusEl=StreamState.statusEl;
+      if(outEl){
+        if(outEl.textContent&&/^\s*⏳/.test(outEl.textContent)){
+          outEl.textContent='';
+          if(statusEl&&!statusEl.textContent.includes('📡'))statusEl.innerHTML='📡 串流中...';
+        }
+        outEl.textContent=fullText;
+        outEl.scrollTop=outEl.scrollHeight;
+      }
+      StreamState._lastOutput=fullText;
+      if(done){
+        // Stop live timer
+        if(StreamState._timer){clearInterval(StreamState._timer);StreamState._timer=null}
+        // Record timing metrics
+        const dur=Date.now()-(batch._startTime||Date.now());
+        batch.duration=dur;
+        if(fullText)Metrics.add(batch._prompt?.length||0,fullText.length,dur);
+        app.save();
+        if(statusEl)statusEl.textContent='✅ 完成';
+        // Save stream log for later viewing
+        if(batch&&fullText)batch._streamLog=fullText;
+        try{
+          const cleaned=extractJsonFromResponse(fullText);
+          const parsed=JSON.parse(cleaned);
+          applyBatchResponseRaw(docIdx,batchIdx,parsed);
+          if(statusEl)statusEl.innerHTML='✅ 處理完成（'+formatTime(dur)+'）';
+        }catch(e2){
+          logAiError('批次 JSON 解析',prompt,fullText,e2.message);
+          batch.status='pending';renderAll();
+          if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗，請手動修正<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+        }
+        // Delay so user can see result before next batch overwrites panel
+        setTimeout(()=>doneOne(),2000);
+      }
+    }).catch(e=>{
+      const outEl=StreamState.outEl;
+      const statusEl=StreamState.statusEl;
+      if(outEl)outEl.textContent='❌ 串流失敗 ('+e.message+')，改用非串流...';
+      if(statusEl)statusEl.innerHTML='❌ 串流失敗，降級至非串流...';
+      return callOpenAI(prompt,'批次處理').then(resp=>{
+        if(resp&&resp.response){
+          if(outEl)outEl.textContent=resp.response;
+          if(statusEl)statusEl.textContent='✅ 完成（非串流）';
+          if(batch)batch._streamLog=resp.response;
+          batch.duration=Date.now()-(batch._startTime||Date.now());
+          try{
+            const cleaned=extractJsonFromResponse(resp.response);
+            const parsed=JSON.parse(cleaned);
+            applyBatchResponseRaw(docIdx,batchIdx,parsed);
+            if(statusEl)statusEl.innerHTML='✅ 處理完成（非串流）';
+          }catch(e2){
+            batch.status='pending';renderAll();
+            if(statusEl)statusEl.innerHTML='❌ JSON 解析失敗（非串流）<br><button class="btn btn-sm" onclick="applyBatchResponse('+docIdx+','+batchIdx+')" style="margin-top:4px">套用為 JSON</button>';
+          }
+        }else{
+          batch.status='pending';renderAll();
+          if(statusEl)statusEl.innerHTML='❌ 空回覆 — DeepSeek 未回傳內容';
         }
         setTimeout(()=>doneOne(),2000);
       }).catch(e=>{
@@ -888,7 +1026,8 @@ function generateBatchPrompt(story,batch){
   formatParts.push('"foreshadowing":[]');
   const outputFmt='{\n  '+formatParts.join(',\n  ')+'\n}';
 
-  return `你是故事紀要工具。基於以下故事內容，依模板提示產出完整分析。
+  const SPEAKER_RULE='\n## 對白歸屬規則\n- 內容中若出現「網名+冒號」前綴（如 (頭皮慶:) 或 (⋆.˚ ૮ • ﻌ - ა ˖ ࣪ ⊹ 老J:)），代表這是該玩家發言。\n- 玩家可能操控 NPC 角色，因此實際說話者不一定是該玩家本人，可能是其操控的 NPC。\n- 若該段內容中能明確找到實際說話的角色名稱，請**忽略前面的網名冒號**，將對白歸屬於內容中的角色。\n- 若找不到任何角色名，才將對白歸屬於前面的網名。\n';
+  return `你是故事紀要工具。基於以下故事內容，依模板提示產出完整分析。${SPEAKER_RULE}
 
 ## 最近紀要條目（供參考）
 ${ctx||'（尚無條目）'}
@@ -899,6 +1038,23 @@ ${batch.text}
 
 ## 輸出格式（純 JSON，無 markdown 包裝，無額外文字）
 ${outputFmt}`;
+}
+
+// Adjust prompt based on reasoning (thinking) settings:
+// - thinkingEnabled off → ask for direct answer, no chain-of-thought
+// - thinkingLevel low/medium/high → tune how much reasoning the model is asked to do
+function applyThinkingMode(prompt){
+  const s=app.settings;
+  if(s.thinkingEnabled===false){
+    return prompt+'\n\n請直接給出最終答案，不要輸出任何逐步推理、思考過程或「分析」章節。';
+  }
+  const level=s.thinkingLevel||'medium';
+  const hints={
+    low:'請先快速理解內容，再直接產出結果；推理保持簡短，不要展開多餘的思考步驟。',
+    medium:'請先簡要分析內容的關鍵點，再產出結果。',
+    high:'請先深入分析內容的所有細節與關聯（人物、事件、因果、伏筆），確認沒有遺漏後，再產出結果。'
+  };
+  return prompt+'\n\n'+(hints[level]||hints.medium);
 }
 
 // Strip markdown ```json ... ``` wrappers from LLM output, with JSON repair
@@ -1079,6 +1235,24 @@ function clearBatchResult(docIdx,batchIdx){
   app.save();renderAll();
 }
 
+function deleteDocument(docIdx){
+  const story=app.currentStory;if(!story)return;
+  const doc=story.doc[docIdx];if(!doc)return;
+  const doneCount=doc.batches.filter(b=>b.status==='done').length;
+  let msg=`確認刪除文檔「${doc.name}」？\n此操作不可復原。`;
+  if(doneCount>0)msg+=`\n\n將一併移除該文檔產生的 ${doneCount} 條紀要等表格條目。`;
+  if(!confirm(msg))return;
+  if(story.doc.some(d=>d.batches.some(b=>b.status==='processing'))){
+    if(!confirm('目前有批次正在處理中，刪除可能導致異常。仍要刪除嗎？'))return;
+  }
+  const batchIds=new Set(doc.batches.map(b=>b.id));
+  story.doc.splice(docIdx,1);
+  for(const s of Object.values(story.sheets)){
+    if(s.rows)s.rows=s.rows.filter(r=>!r._batchId||!batchIds.has(r._batchId));
+  }
+  app.save();renderAll();
+}
+
 function reprocessAllDone(){
   const story=app.currentStory;if(!story)return;
   if(!confirm('將所有已處理批次重設為待處理，可重新執行？'))return;
@@ -1125,7 +1299,8 @@ function sendChat(){
   box.scrollTop=box.scrollHeight;
 
   const ctx=buildChatContext(story);
-  const fullPrompt=`以下是當前故事表格資料：\n${ctx}\n\n使用者的訊息：${msg}\n\n請根據表格資料回答或執行使用者的要求。`;
+  const SPEAKER_RULE='\n## 對白歸屬規則\n- 內容中若出現「網名+冒號」前綴（如 (頭皮慶:) 或 (⋆.˚ ૮ • ﻌ - ა ˖ ࣪ ⊹ 老J:)），代表這是該玩家發言。\n- 玩家可能操控 NPC 角色，因此實際說話者不一定是該玩家本人，可能是其操控的 NPC。\n- 若該段內容中能明確找到實際說話的角色名稱，請**忽略前面的網名冒號**，將對白歸屬於內容中的角色。\n- 若找不到任何角色名，才將對白歸屬於前面的網名。\n';
+  const fullPrompt=applyThinkingMode(`以下是當前故事表格資料：${SPEAKER_RULE}${ctx}\n\n使用者的訊息：${msg}\n\n請根據表格資料回答或執行使用者的要求。`);
 
   const mode=app.settings.aiProvider;
   if(mode==='prompt'){
@@ -1144,6 +1319,25 @@ function sendChat(){
     box.scrollTop=box.scrollHeight;
     const msgEl=document.querySelector('#'+msgId+' div:last-child');
     callOllamaStream(fullPrompt,'AI 對話',(fullText,delta,done)=>{
+      if(msgEl){
+        msgEl.textContent=fullText;
+        msgEl.style.color='var(--text)';
+        msgEl.classList.remove('chat-streaming');
+        box.scrollTop=box.scrollHeight;
+      }
+      if(done){
+        tryProcessChatAction(fullText);
+      }
+    }).catch(e=>{
+      if(msgEl)msgEl.innerHTML='<span style="color:var(--red)">錯誤：'+escHtml(e.message)+'</span>';
+      box.scrollTop=box.scrollHeight;
+    });
+  } else if(mode==='deepseek'){
+    const msgId='chatMsg_'+uid();
+    box.insertAdjacentHTML('beforeend',`<div class="chat-msg ai" id="${msgId}"><div class="label">AI</div><div class="chat-streaming" style="color:var(--text3)">⏳ 生成中...</div></div>`);
+    box.scrollTop=box.scrollHeight;
+    const msgEl=document.querySelector('#'+msgId+' div:last-child');
+    callOpenAIStream(fullPrompt,'AI 對話',(fullText,delta,done)=>{
       if(msgEl){
         msgEl.textContent=fullText;
         msgEl.style.color='var(--text)';
@@ -1290,7 +1484,8 @@ async function callOllama(prompt,context){
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model, prompt, stream:false})
+      body:JSON.stringify({model, prompt, stream:false}),
+      signal:AbortSignal.timeout(180000)
     });
     if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
     const data=await resp.json();
@@ -1315,7 +1510,8 @@ async function callOllamaStream(prompt,context,onToken){
     const resp=await fetch(url,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model, prompt, stream:true})
+      body:JSON.stringify({model, prompt, stream:true}),
+      signal:AbortSignal.timeout(180000)
     });
     if(!resp.ok)throw new Error('Ollama HTTP '+resp.status);
 
@@ -1394,6 +1590,89 @@ async function callOllamaStream(prompt,context,onToken){
     return fullText;
   }catch(e){
     logAiError(context||'Ollama 串流',prompt,null,e.message);
+    throw e;
+  }
+}
+
+async function callOpenAI(prompt,context){
+  const base=(app.settings.apiEndpoint||'https://api.deepseek.com/v1').replace(/\/+$/,'');
+  const url=base+'/chat/completions';
+  const model=app.settings.deepseekModel||'deepseek-chat';
+  const key=app.settings.apiKey;
+  try{
+    const resp=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model,messages:[{role:'user',content:prompt}],stream:false}),
+      signal:AbortSignal.timeout(180000)
+    });
+    if(!resp.ok)throw new Error('OpenAI HTTP '+resp.status);
+    const data=await resp.json();
+    const text=data.choices?.[0]?.message?.content;
+    if(text!=null)return {response:text};
+    const errMsg='空回覆或格式異常';
+    logAiError(context||'OpenAI 呼叫',prompt,data,errMsg);
+    throw new Error(errMsg+'：'+JSON.stringify(data).slice(0,200));
+  }catch(e){
+    logAiError(context||'OpenAI 呼叫',prompt,null,e.message);
+    throw e;
+  }
+}
+
+async function callOpenAIStream(prompt,context,onToken){
+  const base=(app.settings.apiEndpoint||'https://api.deepseek.com/v1').replace(/\/+$/,'');
+  const url=base+'/chat/completions';
+  const model=app.settings.deepseekModel||'deepseek-chat';
+  const key=app.settings.apiKey;
+  let fullText='';
+  try{
+    const resp=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model,messages:[{role:'user',content:prompt}],stream:true}),
+      signal:AbortSignal.timeout(180000)
+    });
+    if(!resp.ok)throw new Error('OpenAI HTTP '+resp.status);
+    if(!resp.body||!resp.body.getReader){
+      const data=await resp.json();
+      const text=data.choices?.[0]?.message?.content||'';
+      if(text)onToken(text,'',true);
+      else throw new Error('無法解析回覆');
+      return text;
+    }
+    const reader=resp.body.getReader();
+    const decoder=new TextDecoder();
+    let buf='';
+    let _tokLast=0;
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=decoder.decode(value,{stream:true});
+      const lines=buf.split('\n');
+      buf=lines.pop()||'';
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        const payload=line.slice(6).trim();
+        if(payload==='[DONE]')continue;
+        try{
+          const chunk=JSON.parse(payload);
+          const delta=chunk.choices?.[0]?.delta?.content||'';
+          if(!delta)continue;
+          fullText+=delta;
+          const now=Date.now();
+          if(now-_tokLast>=30){_tokLast=now;onToken(fullText,delta,false)}
+        }catch(e){}
+      }
+    }
+    if(fullText){
+      onToken(fullText,'',true);
+    }else{
+      logAiError(context||'OpenAI 串流',prompt,null,'串流結束但無內容');
+      throw new Error('串流結束但無內容');
+    }
+    return fullText;
+  }catch(e){
+    logAiError(context||'OpenAI 串流',prompt,null,e.message);
     throw e;
   }
 }
@@ -2031,16 +2310,16 @@ function renderDocsPanel(el,story){
 
   for(let di=0;di<story.doc.length;di++){
     const doc=story.doc[di];
-    html+=`<div class="doc-item"><span class="name">${escHtml(doc.name)}</span><span class="size">${doc.text.length}字 / ${doc.batches.length}批次</span><button class="btn btn-sm btn-outline" onclick="openFindReplace(${di})" title="搜尋取代此文檔" style="margin-left:8px">🔍</button></div>`;
+    html+=`<div class="doc-item"><span class="name">${escHtml(doc.name)}</span><span class="size">${doc.text.length}字 / ${doc.batches.length}批次</span><button class="btn btn-sm btn-outline" onclick="openFindReplace(${di})" title="搜尋取代此文檔" style="margin-left:8px">🔍</button><button class="btn btn-sm btn-danger" onclick="deleteDocument(${di})" title="刪除此文檔及其產生的紀要條目">🗑</button></div>`;
     html+=`<div class="batch-list" style="margin:4px 0 12px 16px">`;
     for(let bi=0;bi<doc.batches.length;bi++){
       const b=doc.batches[bi];
       const statusClass=b.status==='done'?'status-done':b.status==='processing'?'status-processing':'status-pending';
       html+=`<div class="batch-card">`;
       html+=`<div class="header"><span class="num">批次 #${bi+1}</span><span class="tokens">${b.tokens} tokens</span></div>`;
-      html+=`<div class="preview">${escHtml(b.text.slice(0,120))}</div>`;
+      html+=`<div class="preview">${escHtml((b.text||doc.text.slice(b.start||0,b.end||0)||'').slice(0,120))}</div>`;
       html+=`<div style="margin-top:4px;display:flex;gap:6px;align-items:center">`;
-      html+=`<span class="status ${statusClass}">${b.status==='done'?'✅已處理':b.status==='processing'?'⏳處理中':'⏸待處理'}${b.duration?' ('+formatTime(b.duration)+')':''}</span>`;
+      html+=`<span class="status ${statusClass}">${b.status==='done'?'✅已處理':b.status==='processing'?('⏳處理中 '+(b._startTime?'('+formatTime(Date.now()-b._startTime)+')':'')):'⏸待處理'}${b.duration?' ('+formatTime(b.duration)+')':''}</span>`;
       if(b.status!=='processing')html+=`<button class="btn btn-sm" onclick="processBatch(${di},${bi})">${b.status==='pending'?'處理此批':'🔄重新處理'}</button>`;
       if(b.result)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchResult(${di},${bi})">查看結果</button>`;
       if(b._prompt)html+=`<button class="btn btn-sm btn-outline" onclick="showBatchPrompt(${di},${bi})">📄提示詞</button>`;
@@ -2051,6 +2330,15 @@ function renderDocsPanel(el,story){
     html+=`</div>`;
   }
   el.innerHTML=html;
+  // Live-update elapsed time for any processing batch
+  const hasProcessing=story.doc.some(d=>d.batches.some(b=>b.status==='processing'));
+  if(hasProcessing){
+    clearTimeout(window._docTimer);
+    window._docTimer=setTimeout(()=>{
+      const panel=document.getElementById('panel_docs');
+      if(panel&&panel.classList.contains('active'))renderDocsPanel(el,story);
+    },1000);
+  }
 }
 
 function showBatchResult(di,bi){
@@ -2895,17 +3183,45 @@ async function deployOllama(){
 // ============ SETTINGS ============
 function showSettings(){
   const s=app.settings;
+  const showOpenAi=s.aiProvider==='deepseek';
   showModal('設定',`
     <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:13px">
       <span>Token 上限</span><input id="setToken" type="number" value="${s.tokenLimit}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
-      <span>AI 模式</span><select id="setAiMode" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px">
+      <span>AI 模式</span><select id="setAiMode" onchange="toggleAiModeFields()" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px">
         <option value="prompt"${s.aiProvider==='prompt'?' selected':''}>Prompt 模式（手動複製）</option>
         <option value="ollama"${s.aiProvider==='ollama'?' selected':''}>Ollama 本地</option>
+        <option value="deepseek"${s.aiProvider==='deepseek'?' selected':''}>DeepSeek</option>
       </select>
-      <span class="d-none" id="apiKeyLabel">API Key</span><input id="setApiKey" type="password" value="${s.apiKey||''}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" class="d-none">
-      <span class="d-none" id="apiUrlLabel">API URL</span><input id="setApiUrl" value="${s.apiEndpoint||''}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px" class="d-none">
-      <span id="ollamaUrlLabel">Ollama URL</span><input id="setOllamaUrl" value="${s.ollamaUrl}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
-      <span>Ollama 模型</span><input id="setOllamaModel" value="${s.ollamaModel}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+      <span id="apiKeyLabel" class="show-if-deepseek${showOpenAi?'':' d-none'}">API Key</span><input id="setApiKey" type="password" value="${s.apiKey||''}" class="show-if-deepseek${showOpenAi?'':' d-none'}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+      <span id="apiUrlLabel" class="show-if-deepseek${showOpenAi?'':' d-none'}">API URL</span>
+        <div class="show-if-deepseek${showOpenAi?'':' d-none'}" style="display:flex;gap:4px;align-items:center">
+          <input id="setApiUrl" value="${s.apiEndpoint||'https://api.deepseek.com/v1'}" style="flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+          <span id="oiStatusDot" style="font-size:16px;cursor:default" title="連線狀態">⚪</span>
+          <button class="btn" onclick="testOpenAIConnection()" style="padding:2px 8px;font-size:12px" title="測試連線並載入模型">🔌</button>
+        </div>
+      <span id="oiStatusRow" class="show-if-deepseek${showOpenAi?'':' d-none'}" style="grid-column:span 2;text-align:center;font-size:12px;padding:2px 0">
+        <span id="oiStatusMsg" style="color:var(--text3)">⚪ 未連線</span>
+      </span>
+      <span id="openaiModelLabel" class="show-if-deepseek${showOpenAi?'':' d-none'}">模型</span>
+        <div class="show-if-deepseek${showOpenAi?'':' d-none'}" style="display:flex;gap:4px">
+          <select id="setOpenaiModel" style="flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+            ${s.openaiModels&&s.openaiModels.length
+              ? s.openaiModels.map(m=>`<option value="${escHtml(m)}"${m===s.deepseekModel?' selected':''}>${escHtml(m)}</option>`).join('')
+              : '<option value="">— 請先測試連線 —</option>'}
+          </select>
+          <button class="btn" onclick="testOpenAIConnection()" style="padding:2px 8px;font-size:12px" title="重新整理模型列表">🔄</button>
+        </div>
+      <span>推理</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px"><input type="checkbox" id="setThinking"${s.thinkingEnabled!==false?' checked':''}> 啟用推理</label>
+          <select id="setThinkingLevel" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:13px">
+            <option value="low"${s.thinkingLevel==='low'?' selected':''}>低</option>
+            <option value="medium"${s.thinkingLevel!=='low'&&s.thinkingLevel!=='high'?' selected':''}>中</option>
+            <option value="high"${s.thinkingLevel==='high'?' selected':''}>高</option>
+          </select>
+        </div>
+      <span id="ollamaUrlLabel" class="show-if-ollama${s.aiProvider!=='ollama'?' d-none':''}">Ollama URL</span><input id="setOllamaUrl" class="show-if-ollama${s.aiProvider!=='ollama'?' d-none':''}" value="${s.ollamaUrl}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
+      <span id="ollamaModelLabel" class="show-if-ollama${s.aiProvider!=='ollama'?' d-none':''}">Ollama 模型</span><input id="setOllamaModel" class="show-if-ollama${s.aiProvider!=='ollama'?' d-none':''}" value="${s.ollamaModel}" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px">
     </div>
     <hr style="border-color:var(--border);margin:12px 0">
     <div style="font-size:14px;font-weight:600;margin-bottom:8px">一鍵部署 Ollama + gemma:12b</div>
@@ -2915,12 +3231,50 @@ function showSettings(){
   `);
 }
 
+window.testOpenAIConnection=async function(){
+  const dot=document.getElementById('oiStatusDot');
+  const msg=document.getElementById('oiStatusMsg');
+  const sel=document.getElementById('setOpenaiModel');
+  const urlInput=document.getElementById('setApiUrl');
+  const keyInput=document.getElementById('setApiKey');
+  if(!dot||!msg)return;
+  const baseUrl=(urlInput?.value||'https://api.deepseek.com/v1').replace(/\/+$/,'');
+  const apiKey=keyInput?.value||'';
+  dot.textContent='🟡';msg.textContent='🟡 連線中...';msg.style.color='var(--accent)';
+  try{
+    const resp=await fetch(baseUrl+'/models',{
+      headers:{'Authorization':'Bearer '+apiKey}
+    });
+    if(!resp.ok)throw new Error('HTTP '+resp.status+' '+(await resp.text()).slice(0,100));
+    const data=await resp.json();
+    const models=(data.data||[]).map(m=>m.id).sort();
+    if(!models.length)throw new Error('伺服器未回傳任何模型');
+    dot.textContent='🟢';msg.textContent='🟢 已連線 · '+models.length+' 個模型';msg.style.color='var(--green)';
+    const current=app.settings.deepseekModel||'deepseek-chat';
+    const pick=models.includes('deepseek-chat')?'deepseek-chat':(models.includes(current)?current:'');
+    sel.innerHTML='<option value="">— 選擇模型 —</option>'+models.map(m=>`<option value="${escHtml(m)}"${m===pick?' selected':''}>${escHtml(m)}</option>`).join('');
+    app.settings.openaiModels=models;
+    app.save();
+  }catch(e){
+    dot.textContent='🔴';msg.textContent='🔴 連線失敗：'+e.message;msg.style.color='var(--red)';
+  }
+};
+
+window.toggleAiModeFields=function(){
+  const mode=document.getElementById('setAiMode')?.value;
+  document.querySelectorAll('.show-if-deepseek').forEach(el=>el.classList.toggle('d-none',mode!=='deepseek'));
+  document.querySelectorAll('.show-if-ollama').forEach(el=>el.classList.toggle('d-none',mode!=='ollama'));
+};
+
 function saveSettings(){
   const s=app.settings;
   s.tokenLimit=parseInt(document.getElementById('setToken')?.value)||2000;
   s.aiProvider=document.getElementById('setAiMode')?.value||'prompt';
   s.apiKey=document.getElementById('setApiKey')?.value||'';
   s.apiEndpoint=document.getElementById('setApiUrl')?.value||'';
+  s.deepseekModel=document.getElementById('setOpenaiModel')?.value||'deepseek-chat';
+  s.thinkingEnabled=document.getElementById('setThinking')?.checked!==false;
+  s.thinkingLevel=document.getElementById('setThinkingLevel')?.value||'medium';
   s.ollamaUrl=document.getElementById('setOllamaUrl')?.value||s.ollamaUrl;
   s.ollamaModel=document.getElementById('setOllamaModel')?.value||s.ollamaModel;
   app.save();closeModal();
