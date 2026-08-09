@@ -735,7 +735,8 @@ function batchLog(batch,action,detail){
 
 // Failure handling with automatic retry.
 // Returns true when a retry has been scheduled (caller should NOT move the queue),
-// false when attempts are exhausted (caller should mark pending + continue).
+// false when attempts are exhausted — in that case the whole queue is stopped so
+// remaining batches do NOT proceed until the user fixes the problem.
 function batchGiveUp(docIdx,batchIdx,reason){
   const story=app.currentStory;if(!story)return false;
   const doc=story.doc[docIdx];if(!doc)return false;
@@ -752,6 +753,16 @@ function batchGiveUp(docIdx,batchIdx,reason){
     setTimeout(()=>_runBatchWithQueue(docIdx,batchIdx),delay);
     return true;
   }
+  // 重試次數用盡：停止整個佇列，不再繼續後續批次
+  batch.status='pending';
+  batchLog(batch,'已停止','重試 '+max+' 次後仍失敗，處理已中止');
+  const remaining=BatchState.length;
+  BatchState.cancel();
+  app.save();renderAll();
+  showModal('⚠ 批次處理已停止',`<div style="font-size:14px;color:var(--text)">批次 #${batchIdx+1} 在重試 ${max} 次後仍失敗，已停止處理，不再繼續後續批次。</div>
+    <div style="font-size:13px;color:var(--text2);margin-top:6px;word-break:break-all">原因：${escHtml(reason)}</div>
+    ${remaining?`<div style="font-size:13px;color:var(--orange);margin-top:6px">尚有 ${remaining} 個待處理批次已暫停。請修正問題後，再次點擊「▶ 處理所有待處理批次」繼續。</div>`:''}
+    <div class="actions" style="margin-top:12px"><button class="btn" onclick="closeModal()">關閉</button></div>`);
   return false;
 }
 
@@ -1093,6 +1104,7 @@ function processBatch(docIdx,batchIdx){
   const doc=story.doc[docIdx];if(!doc)return;
   const batch=doc.batches[batchIdx];if(!batch)return;
   delete batch._attempts;
+  BatchState.cancelled=false;
   enqueueBatch(docIdx,batchIdx);
   if(BatchState.length===1)processNextInQueue();
 }
