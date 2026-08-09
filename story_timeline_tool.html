@@ -466,63 +466,122 @@ const app = (()=>{
     }
     return stripped;
   }
-  function save(){
-    clearTimeout(_saveTimer);
-    // Tier 1: full save (only strips recoverable batch text).
-    let stripped=stripBatchPayloads(_stories,1);
-    let json;
-    const payload=()=>JSON.stringify({
-      stories:_stories, currentStoryId:_currentStoryId,
+
+  // ---- IndexedDB storage (primary; much larger quota than localStorage ~5MB) ----
+  let _db=null,_dbReady=null,_loaded=false;
+  function openDB(){
+    if(_dbReady)return _dbReady;
+    _dbReady=new Promise(resolve=>{
+      if(!window.indexedDB){resolve(null);return}
+      try{
+        const req=indexedDB.open('storyAppDB',1);
+        req.onupgradeneeded=()=>{
+          const db=req.result;
+          if(!db.objectStoreNames.contains('kv'))db.createObjectStore('kv');
+        };
+        req.onsuccess=()=>{_db=req.result;resolve(_db)};
+        req.onerror=()=>resolve(null);
+      }catch(e){resolve(null)}
+    });
+    return _dbReady;
+  }
+  function idbPut(key,val){
+    return openDB().then(db=>new Promise(resolve=>{
+      if(!db){resolve(false);return}
+      try{
+        const tx=db.transaction('kv','readwrite');
+        tx.objectStore('kv').put(val,key);
+        tx.oncomplete=()=>resolve(true);
+        tx.onerror=()=>resolve(false);
+      }catch(e){resolve(false)}
+    }));
+  }
+  function idbGet(key){
+    return openDB().then(db=>new Promise(resolve=>{
+      if(!db){resolve(null);return}
+      try{
+        const tx=db.transaction('kv','readonly');
+        const r=tx.objectStore('kv').get(key);
+        r.onsuccess=()=>resolve(r.result||null);
+        r.onerror=()=>resolve(null);
+      }catch(e){resolve(null)}
+    }));
+  }
+
+  function buildPayload(stories){
+    return JSON.stringify({
+      stories, currentStoryId:_currentStoryId,
       templates:_templates, settings:_settings
     });
+  }
+  // localStorage compact cache used when IndexedDB is unavailable (e.g. file://).
+  function persistLocalCache(){
     try{
-      json=payload();
-      localStorage.setItem('storyApp',json);
-      if(stripped>0)console.warn('已自動剝離 '+stripped+' 筆批次內容（由 doc.text 座標還原）');
+      localStorage.setItem('storyApp',buildPayload(_stories));
+      window._storageError=null;
+      return;
     }catch(e){
-      // Tier 2: drop transient AI fields (_streamLog/_prompt/etc) and retry.
+      // Quota: strip a clone (never destroy live data) and retry harder.
       try{
-        stripped=stripBatchPayloads(_stories,2);
-        json=payload();
-        localStorage.setItem('storyApp',json);
-        console.warn('儲存空間吃緊：已移除臨時批次欄位（'+stripped+' 項）以完成儲存');
-      }catch(e2){
-        // Tier 3: drop activity logs and shrink errorLog, then retry.
-        try{
-          stripped=stripBatchPayloads(_stories,3);
-          json=payload();
-          localStorage.setItem('storyApp',json);
-          console.warn('儲存空間吃緊：已移除處理紀錄與舊錯誤日誌（'+stripped+' 項）');
-        }catch(e3){
-          // Give up and surface a visible warning.
-          try{
-            console.warn('儲存失敗，可能 localStorage 已滿',e3.message);
-            window._storageError='⚠ 儲存空間不足：最近的處理結果可能不會被保存。建議立即匯出故事備份（💾匯出），並刪除較舊的故事或文檔。';
-          }catch(e4){}
+        const backup=clone(_stories);
+        let level=2,bj=null;
+        while(level<=3){
+          stripBatchPayloads(backup,level);
+          bj=buildPayload(backup);
+          try{localStorage.setItem('storyApp',bj);window._storageError=null;return}
+          catch(e2){level++;}
         }
+        throw new Error('quota');
+      }catch(e3){
+        console.warn('儲存空間不足（IndexedDB 不可用）',e3&&e3.message);
+        window._storageError='⚠ 儲存空間不足：最近的處理結果可能不會被保存。建議立即匯出故事備份（💾匯出），並刪除較舊的故事或文檔。';
       }
     }
   }
-  function load(){
+  function save(){
+    clearTimeout(_saveTimer);
+    // Remove recoverable batch text (rebuildable from doc.text) — lossless size optimization.
+    stripBatchPayloads(_stories,1);
+    let json;
+    try{json=buildPayload(_stories)}catch(e){return}
+    // Primary: IndexedDB holds everything.
+    idbPut('storyApp',json).then(ok=>{
+      if(ok){window._storageError=null;}
+      else persistLocalCache();
+    });
+  }
+  function applyPersisted(p){
+    if(!p)return;
+    if(p.stories)_stories=p.stories;
+    if(p.currentStoryId!=null)_currentStoryId=p.currentStoryId;
+    // Merge: keep user custom templates, always use latest builtins
+    if(p.templates){
+      const userTemplates=p.templates.filter(t=>!t.builtin);
+      _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE,...userTemplates];
+    }
+    if(p.settings)_settings={..._settings,...p.settings};
+  }
+  async function load(){
+    if(_loaded)return;
+    _loaded=true;
+    // Prefer IndexedDB (may hold data larger than localStorage).
+    try{
+      const idbData=await idbGet('storyApp');
+      if(idbData){applyPersisted(JSON.parse(idbData));return;}
+    }catch(e){}
+    // Fallback: localStorage from previous versions; then push it up to IndexedDB.
     try{
       const d=localStorage.getItem('storyApp');
-      if(!d)return;
-      const p=JSON.parse(d);
-      if(p.stories)_stories=p.stories;
-      if(p.currentStoryId!=null)_currentStoryId=p.currentStoryId;
-      // Merge: keep user custom templates, always use latest builtins
-      if(p.templates){
-        const userTemplates=p.templates.filter(t=>!t.builtin);
-        _templates=[JK_TEMPLATE,GEN_TEMPLATE,MAGIC_SCHOOL_TEMPLATE,...userTemplates];
+      if(d){
+        applyPersisted(JSON.parse(d));
+        save(); // migrate old localStorage data into IndexedDB
       }
-      if(p.settings)_settings={..._settings,...p.settings};
     }catch(e){}
   }
   function debouncedSave(){clearTimeout(_saveTimer);_saveTimer=setTimeout(save,100)}
 
   // --- Load persisted data ---
   load();
-
   // --- Public API ---
   return {
     // Story access
@@ -3701,7 +3760,9 @@ window.openNewTab=function(){
 };
 
 // ============ INIT ============
-document.addEventListener('DOMContentLoaded',()=>{
+document.addEventListener('DOMContentLoaded',async ()=>{
+  // Wait for async IndexedDB/localStorage load before first render
+  try{await app.load()}catch(e){}
   // Detect file:// protocol and show hint
   const hint=document.getElementById('protocolHint');
   if(hint&&location.protocol==='file:'){
