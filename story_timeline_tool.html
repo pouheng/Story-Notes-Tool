@@ -1283,9 +1283,12 @@ function generateBatchPrompt(story,batch){
 
 寧可少提、不要濫提。若無符合標準的內容則輸出空陣列[]。`;
   let foreshadowSection=`\n## 伏筆\n`;
-  if(story.foreshadow&&story.foreshadow.length>0){
+  // Only unresolved foreshadowing is sent to the AI — resolved ones are no longer
+  // relevant (and including them wastes tokens).
+  const openForeshadow=(story.foreshadow||[]).filter(f=>f.status!=='resolved');
+  if(openForeshadow.length>0){
     foreshadowSection+=`**已有伏筆（請勿重複提取）：**\n`;
-    for(const f of story.foreshadow){
+    for(const f of openForeshadow){
       foreshadowSection+=`- [${f.status}] ${f.text}（關鍵字：${f.keyword||'無'}）\n`;
     }
     foreshadowSection+=FORESHADOW_CRITERIA;
